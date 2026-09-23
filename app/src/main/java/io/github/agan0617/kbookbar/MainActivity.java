@@ -45,6 +45,7 @@ public class MainActivity extends Activity {
     private ValueCallback<Uri[]> fileCb;
     private TextToSpeech voiceProbe; // 只用來列語音清單（服務還沒啟動時也要列得出來）
     private volatile boolean voicesReady;
+    private boolean pageFailed;
 
     @SuppressLint({"SetJavaScriptEnabled", "JavascriptInterface"})
     @Override protected void onCreate(Bundle saved) {
@@ -61,10 +62,33 @@ public class MainActivity extends Activity {
         s.setSupportMultipleWindows(false);
         s.setTextZoom(100); // 字級交給網頁自己的設定
         s.setUserAgentString(s.getUserAgentString() + " KBookBarApp/" + BuildConfigVersion.NAME);
-        s.setCacheMode(isOnline() ? WebSettings.LOAD_DEFAULT : WebSettings.LOAD_CACHE_ELSE_NETWORK);
+        // 有網路就一律抓最新網頁（GitHub Pages 會被快取 10 分鐘，網頁改版 App 會一直看到舊版）；
+        // 抓回來的仍會寫進快取，離線時才用快取裡的
+        s.setCacheMode(isOnline() ? WebSettings.LOAD_NO_CACHE : WebSettings.LOAD_CACHE_ELSE_NETWORK);
 
         web.addJavascriptInterface(new Bridge(), "KBookNative");
         web.setWebViewClient(new WebViewClient() {
+            @Override public void onPageStarted(WebView v, String url, android.graphics.Bitmap icon) {
+                if (url != null && url.startsWith("http")) pageFailed = false;
+            }
+
+            // 抓不到最新網頁（剛開機網路還沒通、訊號差）：先退回快取；快取也沒有就顯示重試頁
+            @Override public void onReceivedError(WebView v, WebResourceRequest r, android.webkit.WebResourceError e) {
+                if (!r.isForMainFrame()) return;
+                pageFailed = true;
+                WebSettings ws = v.getSettings();
+                if (ws.getCacheMode() != WebSettings.LOAD_CACHE_ELSE_NETWORK) {
+                    ws.setCacheMode(WebSettings.LOAD_CACHE_ELSE_NETWORK);
+                    v.loadUrl(HOME);
+                } else {
+                    v.loadDataWithBaseURL(null,
+                            "<meta name='viewport' content='width=device-width,initial-scale=1'>"
+                            + "<body style='font-family:sans-serif;text-align:center;padding:30vh 24px 0;color:#888;background:transparent'>"
+                            + "<p>連不上網路，K書吧打不開。</p><p><a href='" + HOME + "' style='color:#5b8bd6'>網路恢復後點這裡重試</a></p></body>",
+                            "text/html", "utf-8", null);
+                }
+            }
+
             @Override public boolean shouldOverrideUrlLoading(WebView v, WebResourceRequest r) {
                 Uri u = r.getUrl();
                 if (HOST.equals(u.getHost())) return false;
@@ -97,6 +121,16 @@ public class MainActivity extends Activity {
 
         if (saved != null) web.restoreState(saved); else web.loadUrl(HOME);
         askPermissions();
+    }
+
+    @Override protected void onResume() {
+        super.onResume();
+        // 上次沒載成功、現在有網路了：抓最新版重來
+        if (pageFailed && isOnline() && web != null) {
+            pageFailed = false;
+            web.getSettings().setCacheMode(WebSettings.LOAD_NO_CACHE);
+            web.loadUrl(HOME);
+        }
     }
 
     @Override protected void onSaveInstanceState(Bundle out) {
