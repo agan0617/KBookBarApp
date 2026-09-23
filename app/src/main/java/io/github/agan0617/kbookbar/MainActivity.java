@@ -35,7 +35,7 @@ import org.json.JSONObject;
  */
 public class MainActivity extends Activity {
 
-    static final String HOME = "https://agan0617.github.io/BookReader/";
+    static final String HOME = "https://agan0617.github.io/KBookBar/";
     private static final String HOST = "agan0617.github.io";
     private static final int REQ_FILE = 10;
     private static final int REQ_NOTIF = 11;
