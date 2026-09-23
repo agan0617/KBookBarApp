@@ -116,7 +116,8 @@ public class MainActivity extends Activity {
         });
         voiceProbe = new TextToSpeech(this, status -> {
             voicesReady = status == TextToSpeech.SUCCESS;
-            if (voicesReady) main.post(() -> web.evaluateJavascript("window.KBookNativeEvent&&window.KBookNativeEvent({type:'voices'})", null));
+            // 引擎初始化完成時 Activity 可能已經關掉（web 已經 destroy），要先檢查
+            if (voicesReady) main.post(() -> { if (web != null) web.evaluateJavascript("window.KBookNativeEvent&&window.KBookNativeEvent({type:'voices'})", null); });
         }, TtsService.GOOGLE_TTS);
 
         if (saved != null) web.restoreState(saved); else web.loadUrl(HOME);
@@ -214,7 +215,22 @@ public class MainActivity extends Activity {
         @JavascriptInterface public void seek(int ch, int b) { main.post(() -> { TtsService t = TtsService.instance; if (t != null) t.seek(ch, b); }); }
         @JavascriptInterface public void setRate(float r) { main.post(() -> { TtsService t = TtsService.instance; if (t != null) t.setRate(r); }); }
         @JavascriptInterface public void setVolume(float v) { main.post(() -> { TtsService t = TtsService.instance; if (t != null) t.setVolume(v); }); }
-        @JavascriptInterface public void setVoice(String id) { main.post(() -> { TtsService t = TtsService.instance; if (t != null) t.setVoice(id); }); }
+        @JavascriptInterface public void setVoice(String id) {
+            main.post(() -> {
+                // 選到還沒下載的語音：帶去 Google 語音的下載頁
+                if (id != null && !id.isEmpty() && voiceProbe != null) {
+                    try {
+                        for (android.speech.tts.Voice v : voiceProbe.getVoices()) {
+                            if (!v.getName().equals(id) || !TtsService.notInstalled(v)) continue;
+                            if (web != null) web.evaluateJavascript("window.KBookNativeEvent&&window.KBookNativeEvent({type:'error',message:'這個語音要先下載：在接下來的畫面下載「" + v.getLocale().getDisplayName(java.util.Locale.TRADITIONAL_CHINESE) + "」，好了回來再選一次'})", null);
+                            startActivity(new Intent(TextToSpeech.Engine.ACTION_INSTALL_TTS_DATA).setPackage(TtsService.GOOGLE_TTS));
+                            break;
+                        }
+                    } catch (Exception ignored) { }
+                }
+                TtsService t = TtsService.instance; if (t != null) t.setVoice(id);
+            });
+        }
         @JavascriptInterface public void setSleep(String v) { main.post(() -> { TtsService t = TtsService.instance; if (t != null) t.setSleep(v); }); }
 
         @JavascriptInterface public String getState() {
@@ -224,6 +240,29 @@ public class MainActivity extends Activity {
         @JavascriptInterface public String getVoices() {
             if (!voicesReady || voiceProbe == null) return "[]";
             return TtsService.voicesJson(voiceProbe);
+        }
+
+        /** 診斷用：引擎回報的全部語音（含沒安裝的）與手機上有哪些語音引擎 */
+        @JavascriptInterface public String diag() {
+            try {
+                JSONObject o = new JSONObject();
+                o.put("ready", voicesReady);
+                if (voiceProbe != null) {
+                    org.json.JSONArray engines = new org.json.JSONArray();
+                    for (TextToSpeech.EngineInfo e : voiceProbe.getEngines()) engines.put(e.name + " / " + e.label);
+                    o.put("engines", engines);
+                    o.put("default", voiceProbe.getDefaultEngine());
+                    org.json.JSONArray all = new org.json.JSONArray();
+                    java.util.Set<android.speech.tts.Voice> vs = voiceProbe.getVoices();
+                    if (vs != null) for (android.speech.tts.Voice v : vs) {
+                        String l = v.getLocale().getLanguage();
+                        if (!(l.equals("zh") || l.equals("cmn") || l.equals("yue") || l.equals("ja"))) continue;
+                        all.put(v.getName() + " | " + v.getLocale().toLanguageTag() + " | net=" + v.isNetworkConnectionRequired() + " | " + v.getFeatures());
+                    }
+                    o.put("voices", all);
+                }
+                return o.toString();
+            } catch (Exception e) { return "{\"error\":\"" + e + "\"}"; }
         }
 
         @JavascriptInterface public String engine() {

@@ -147,7 +147,7 @@ public class TtsService extends Service implements TextToSpeech.OnInitListener {
         tts.setOnUtteranceProgressListener(new UtteranceProgressListener() {
             @Override public void onStart(String id) { main.post(() -> onUtterStart(id)); }
             @Override public void onDone(String id) { main.post(() -> onUtterDone(id)); }
-            @Override public void onError(String id) { main.post(() -> onUtterDone(id)); }
+            @Override public void onError(String id) { main.post(() -> onUtterError(id)); }
             @Override public void onStop(String id, boolean interrupted) { }
         });
         applyVoice();
@@ -276,8 +276,17 @@ public class TtsService extends Service implements TextToSpeech.OnInitListener {
         return true;
     }
 
+    private int errs; // 連續出錯次數：語音沒下載、沒網路時每句都會錯，不擋的話會一路「跳」完整本書
+
+    private void onUtterError(String id) {
+        int[] p = parse(id); if (p == null || p[0] != gen || !playing) return;
+        if (++errs > 3) { errs = 0; pause(); emitError("朗讀一直出錯，可能是這個語音還沒下載好或沒有網路，換個語音試試"); return; }
+        onUtterDone(id);
+    }
+
     private void onUtterStart(String id) {
         int[] p = parse(id); if (p == null || p[0] != gen) return;
+        errs = 0;
         if (stopAtChEnd && sleepCh >= 0 && p[1] > sleepCh) { stopAtChEnd = false; sleepCh = -1; pause(); emit("sleep"); return; }
         if (p[3] == 0) {
             boolean chapterChanged = p[1] != ch;
@@ -339,44 +348,87 @@ public class TtsService extends Service implements TextToSpeech.OnInitListener {
         if (!ttsReady) return;
         if (!voiceName.isEmpty()) {
             try {
-                for (Voice v : tts.getVoices()) if (v.getName().equals(voiceName)) { tts.setVoice(v); return; }
+                for (Voice v : tts.getVoices()) if (v.getName().equals(voiceName)) {
+                    if (!notInstalled(v)) { tts.setVoice(v); return; }
+                    emitError("選的語音還沒下載好，先用預設語音念；下載完成後再選一次");
+                    break;
+                }
             } catch (Exception ignored) { }
         }
         tts.setLanguage(Locale.TAIWAN);
     }
 
-    /** 給網頁列語音清單：中文語音、已安裝的，台灣的排前面 */
+    static boolean notInstalled(Voice v) {
+        return v.getFeatures() != null && v.getFeatures().contains(TextToSpeech.Engine.KEY_FEATURE_NOT_INSTALLED);
+    }
+
+    private static final Pattern SPEAKER = Pattern.compile("-x-([a-z]+)-(local|network)$");
+
+    /** Google 的語音名稱像 cmn-tw-x-ctc-local：ctc 是哪一位聲音，local／network 是本機／線上 */
+    private static String speaker(Voice v) {
+        Matcher m = SPEAKER.matcher(v.getName());
+        return m.find() ? m.group(1) : v.getName();
+    }
+
+    /**
+     * 給網頁列語音清單：中文、日文的每一位聲音（本機／線上各一筆），沒下載的也列、標「未下載」，
+     * 選了會帶去下載頁。同一語言的聲音依代號編成「聲音 1、2、3…」，比 ctc／jab 這種代號好認。
+     */
     static String voicesJson(TextToSpeech t) {
         JSONArray arr = new JSONArray();
         try {
             List<Voice> list = new ArrayList<>();
             for (Voice v : t.getVoices()) {
-                String lang = v.getLocale().getLanguage();
-                if (!(lang.equals("zh") || lang.equals("cmn") || lang.equals("yue"))) continue;
-                if (v.getFeatures() != null && v.getFeatures().contains(TextToSpeech.Engine.KEY_FEATURE_NOT_INSTALLED)) continue;
+                if (group(v) == null) continue;
+                // 「zh-TW-language」這種是舊 API 的語言代表，不是一位聲音
+                if (v.getFeatures() != null && v.getFeatures().contains("legacySetLanguageVoice")) continue;
                 list.add(v);
             }
+            // 每個語系裡的聲音代號排序後編號
+            java.util.Map<String, List<String>> speakers = new java.util.HashMap<>();
+            for (Voice v : list) {
+                List<String> s = speakers.computeIfAbsent(v.getLocale().toLanguageTag(), k -> new ArrayList<>());
+                if (!s.contains(speaker(v))) s.add(speaker(v));
+            }
+            for (List<String> s : speakers.values()) java.util.Collections.sort(s);
             list.sort((x, y) -> {
                 int rx = rank(x), ry = rank(y);
-                return rx != ry ? rx - ry : x.getName().compareTo(y.getName());
+                if (rx != ry) return rx - ry;
+                int ix = notInstalled(x) ? 1 : 0, iy = notInstalled(y) ? 1 : 0;
+                if (ix != iy) return ix - iy;
+                int sx = speaker(x).compareTo(speaker(y));
+                if (sx != 0) return sx;
+                return Boolean.compare(x.isNetworkConnectionRequired(), y.isNetworkConnectionRequired());
             });
             for (Voice v : list) {
                 JSONObject o = new JSONObject();
+                String tag = v.getLocale().toLanguageTag();
+                int n = speakers.get(tag).indexOf(speaker(v)) + 1;
+                String label = v.getLocale().getDisplayName(Locale.TRADITIONAL_CHINESE) + " · 聲音 " + n
+                        + " · " + (v.isNetworkConnectionRequired() ? "線上" : "本機")
+                        + (notInstalled(v) ? "（未下載）" : "");
                 o.put("id", v.getName());
-                String label = v.getLocale().getDisplayName(Locale.TRADITIONAL_CHINESE) + " · " + v.getName();
-                if (v.isNetworkConnectionRequired()) label += "（需網路）";
                 o.put("label", label);
-                o.put("lang", v.getLocale().toLanguageTag());
+                o.put("lang", tag);
+                o.put("group", group(v));
+                o.put("installed", !notInstalled(v));
                 arr.put(o);
             }
         } catch (Exception ignored) { }
         return arr.toString();
     }
 
+    private static String group(Voice v) {
+        String lang = v.getLocale().getLanguage();
+        if (lang.equals("zh") || lang.equals("cmn") || lang.equals("yue")) return "中文";
+        if (lang.equals("ja")) return "日文";
+        return null;
+    }
+
+    /** 分組排序：台灣國語、大陸普通話、粵語、日文 */
     private static int rank(Voice v) {
         String c = v.getLocale().getCountry();
-        int r = c.equals("TW") ? 0 : c.equals("HK") ? 2 : 1;
-        return r * 2 + (v.isNetworkConnectionRequired() ? 1 : 0);
+        return "日文".equals(group(v)) ? 3 : c.equals("TW") ? 0 : c.equals("HK") ? 2 : 1;
     }
 
     // ─────────────────────────────── 音訊焦點、耳機拔出 ───────────────────────────────
