@@ -7,6 +7,22 @@
 - 通知欄、鎖定畫面、藍牙耳機都能播放／暫停／上一段／下一段；定時停止由原生計時
 - 沒用任何第三方函式庫，只有 Android 平台 API
 
+## 用你自己的書架
+
+App 不綁任何人的書：裝好之後連上**你自己的**私有書架 repo，就是你自己的K書吧。
+
+1. **先建好書架 repo 和 token**：照 [BookReader 的〈用你自己的書架〉](https://github.com/agan0617/BookReader#用你自己的書架)第 1、2 步——建一個 Private repo（勾 Add a README file）、產生只授權那個 repo、Contents 為 Read and write 的 fine-grained token。用手機做的話，在瀏覽器裡產生 token 後直接複製
+2. **安裝 App**：到這個 repo 的 [Releases](../../releases) 下載最新的 `.apk`，在手機上打開安裝。第一次會問要不要允許這個來源（瀏覽器或檔案管理員）安裝不明應用程式，允許即可
+3. **打開 App → 連上書架**：按右上角的連線狀態（或書架上的「連上書架」）→ 貼上 token → 展開「**換 repo（一般不用動）**」，改成 **`你的帳號/你的 repo 名`** → 連線。看到「已連上 你的帳號/你的 repo 名」就好了
+4. **允許通知與不限制電池**：App 第一次會問，都允許——朗讀要靠通知欄的前景服務才能在背景、關螢幕時繼續念
+
+注意：
+
+- **App 跟手機瀏覽器是兩台不同的裝置**。就算手機的 Chrome 已經連過書架，App 裡還是要再貼一次 token、再換一次 repo（App 的 WebView 存的資料跟瀏覽器分開）。連上之後書和進度是同一份，「繼續閱讀」會分別列出「手機 App」和其他裝置讀到哪
+- 朗讀用的是手機的語音引擎，建議裝 Google 的「語音服務」（Speech Services by Google）並下載中文語音。朗讀設定的語音清單裡，還沒下載的聲音選了會帶你去下載頁
+- 更新 App：下載新版 `.apk` 直接裝上去，書架和登入都會保留。網頁的功能更新則不用重裝，App 每次打開都會抓最新的網頁
+- App 固定載入 https://agan0617.github.io/BookReader/ 。如果你 fork 了 BookReader 自己架網頁，把 `MainActivity.java` 的 `HOME` 改成你的網址，再照下面〈建置〉自己建一份 APK
+
 ## 結構
 
 | 檔案 | 內容 |
