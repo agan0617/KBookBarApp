@@ -1,0 +1,29 @@
+plugins {
+    id 'com.android.application'
+}
+
+android {
+    namespace 'io.github.agan0617.kbookbar'
+    compileSdk 34
+
+    defaultConfig {
+        applicationId 'io.github.agan0617.kbookbar'
+        minSdk 29
+        targetSdk 34
+        versionCode 1
+        versionName '1.0'
+    }
+
+    buildTypes {
+        release {
+            minifyEnabled false
+            // 只給自己側載用，沿用這台電腦的 debug 金鑰簽章（換電腦就要重裝一次）
+            signingConfig signingConfigs.debug
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+}

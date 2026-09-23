@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">K書吧</string>
+    <string name="channel_name">朗讀</string>
+    <string name="channel_desc">朗讀時顯示播放控制</string>
+</resources>

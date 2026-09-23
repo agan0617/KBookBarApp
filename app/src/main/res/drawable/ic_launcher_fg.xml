@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 108dp 畫布，內容留在中央 66dp 安全區：左邊裝訂線、白色 K、右邊米色書名籤 -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <!-- 裝訂線 -->
+    <path
+        android:strokeColor="#CCF2ECDE"
+        android:strokeWidth="1.6"
+        android:pathData="M30,34 L35,34 M30,46 L35,46 M30,58 L35,58 M30,70 L35,70" />
+    <!-- K -->
+    <path
+        android:strokeColor="#FFFFFF"
+        android:strokeWidth="6"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round"
+        android:pathData="M42,36 L42,72 M58,36 L43,55 M47,50 L59,72" />
+    <!-- 書名籤 -->
+    <path
+        android:fillColor="#F3EEE2"
+        android:pathData="M64,31 L78,31 L78,77 L64,77 Z" />
+    <path
+        android:strokeColor="#6624211D"
+        android:strokeWidth="1"
+        android:pathData="M66,33 L76,33 L76,75 L66,75 Z" />
+    <path
+        android:strokeColor="#24211D"
+        android:strokeWidth="2"
+        android:strokeLineCap="round"
+        android:pathData="M71,40 L71,46 M71,51 L71,57 M71,62 L71,68" />
+</vector>
