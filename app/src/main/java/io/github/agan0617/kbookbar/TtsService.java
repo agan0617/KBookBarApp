@@ -58,7 +58,7 @@ public class TtsService extends Service implements TextToSpeech.OnInitListener {
     private static final int NOTIF_ID = 1;
     private static final int AHEAD = 3; // 預先排進語音佇列的段數，段與段之間才不會有空檔
     private static final int MAX_CHUNK = 1500;
-    // 標題（章名、### 小節名）前後各停一下、念慢一點，聽的人才分得出那是標題不是內文
+    // 標題（章名、### 小節名）念慢一點；網頁沒送 pre（舊網頁）時，標題前後各停一下
     private static final int HEAD_GAP_MS = 700;
     private static final float HEAD_RATE = 0.85f;
     private static final String GAP_ID = "gap"; // 靜音片段的 id，parse 不出來，回呼一律忽略
@@ -69,7 +69,12 @@ public class TtsService extends Service implements TextToSpeech.OnInitListener {
     static volatile String pendingStart;
     static volatile String stateJson = "{\"active\":false,\"playing\":false}";
 
-    private static class Chapter { String title; List<String> blocks = new ArrayList<>(); java.util.Set<Integer> heads = new java.util.HashSet<>(); }
+    private static class Chapter {
+        String title;
+        List<String> blocks = new ArrayList<>();
+        java.util.Set<Integer> heads = new java.util.HashSet<>();
+        int[] pre; // 每段開始前停幾毫秒（1× 語速的基準，網頁算好送來）；舊網頁沒送就是 null
+    }
 
     private final Handler main = new Handler(Looper.getMainLooper());
     private TextToSpeech tts;
@@ -160,7 +165,7 @@ public class TtsService extends Service implements TextToSpeech.OnInitListener {
 
     // ─────────────────────────────── 對外操作 ───────────────────────────────
 
-    /** start 的 JSON：{bookId, bookTitle, chapters:[{title, blocks:[...], heads:[標題段的編號]}], ch, b, rate, volume, voice, sleep} */
+    /** start 的 JSON：{bookId, bookTitle, chapters:[{title, blocks:[...], heads:[標題段的編號], pre:[每段前停幾毫秒]}], ch, b, rate, volume, voice, sleep} */
     private void load(String json) {
         try {
             JSONObject o = new JSONObject(json);
@@ -176,6 +181,8 @@ public class TtsService extends Service implements TextToSpeech.OnInitListener {
                 for (int k = 0; k < bl.length(); k++) chap.blocks.add(bl.getString(k));
                 JSONArray hd = c.optJSONArray("heads"); // 舊版網頁沒送，就全部當內文念
                 if (hd != null) for (int k = 0; k < hd.length(); k++) chap.heads.add(hd.optInt(k, -1));
+                JSONArray pr = c.optJSONArray("pre");
+                if (pr != null) { chap.pre = new int[pr.length()]; for (int k = 0; k < pr.length(); k++) chap.pre[k] = Math.max(0, pr.optInt(k, 0)); }
                 chapters.add(chap);
             }
             ch = clamp(o.optInt("ch"), 0, chapters.size() - 1);
@@ -275,15 +282,22 @@ public class TtsService extends Service implements TextToSpeech.OnInitListener {
         if (chunks.isEmpty()) chunks.add("　");
         Bundle params = new Bundle();
         params.putFloat(TextToSpeech.Engine.KEY_PARAM_VOLUME, volume);
-        // 接著上一段念到標題：先停一下（剛按播放就從標題開始的不用停）
-        if (head && !flush) tts.playSilentUtterance(HEAD_GAP_MS, TextToSpeech.QUEUE_ADD, GAP_ID);
+        Chapter chap = chapters.get(qCh);
+        // 接著上一段念到新的一段：先停一下（剛按播放的那段不停）。網頁有送 pre 就照它（換段、標題前後、換章長短不同），
+        // 舊網頁只有 heads，就只在標題前後停
+        if (!flush) {
+            int gap = chap.pre != null ? (qB < chap.pre.length ? chap.pre[qB] : 0)
+                    : (head || (qB > 0 && chap.heads.contains(qB - 1))) ? HEAD_GAP_MS : 0;
+            gap = Math.round(gap / (float) Math.sqrt(Math.max(1f, rate))); // 語速快時停頓跟著縮短，但縮得比語速慢
+            if (gap > 0) tts.playSilentUtterance(gap, TextToSpeech.QUEUE_ADD, GAP_ID);
+        }
         // 語速在 speak 當下就跟著這一句排進佇列，所以改完馬上改回來不影響前後句
         if (head) tts.setSpeechRate(rate * HEAD_RATE);
         for (int s = 0; s < chunks.size(); s++) {
             String id = gen + "|" + qCh + "|" + qB + "|" + s + "|" + (s == chunks.size() - 1 ? 1 : 0);
             tts.speak(chunks.get(s), flush && s == 0 ? TextToSpeech.QUEUE_FLUSH : TextToSpeech.QUEUE_ADD, params, id);
         }
-        if (head) { tts.setSpeechRate(rate); tts.playSilentUtterance(HEAD_GAP_MS, TextToSpeech.QUEUE_ADD, GAP_ID); }
+        if (head) tts.setSpeechRate(rate);
         qB++;
         return true;
     }
@@ -358,16 +372,22 @@ public class TtsService extends Service implements TextToSpeech.OnInitListener {
 
     private void applyVoice() {
         if (!ttsReady) return;
-        if (!voiceName.isEmpty()) {
+        if (!applyVoice(tts, voiceName)) emitError("選的語音還沒下載好，先用預設語音念；下載完成後再選一次");
+    }
+
+    /** 設成指定的語音；沒指定或找不到就用台灣國語預設。選的語音還沒下載時回傳 false（改用預設） */
+    static boolean applyVoice(TextToSpeech t, String name) {
+        if (name != null && !name.isEmpty()) {
             try {
-                for (Voice v : tts.getVoices()) if (v.getName().equals(voiceName)) {
-                    if (!notInstalled(v)) { tts.setVoice(v); return; }
-                    emitError("選的語音還沒下載好，先用預設語音念；下載完成後再選一次");
-                    break;
+                for (Voice v : t.getVoices()) if (v.getName().equals(name)) {
+                    if (!notInstalled(v)) { t.setVoice(v); return true; }
+                    t.setLanguage(Locale.TAIWAN);
+                    return false;
                 }
             } catch (Exception ignored) { }
         }
-        tts.setLanguage(Locale.TAIWAN);
+        t.setLanguage(Locale.TAIWAN);
+        return true;
     }
 
     static boolean notInstalled(Voice v) {

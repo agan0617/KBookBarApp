@@ -233,6 +233,18 @@ public class MainActivity extends Activity {
         }
         @JavascriptInterface public void setSleep(String v) { main.post(() -> { TtsService t = TtsService.instance; if (t != null) t.setSleep(v); }); }
 
+        /** 試聽一小段（修正讀音時用）：用列語音清單的那個引擎念，不動朗讀服務 */
+        @JavascriptInterface public void preview(String text, String voice, float rate, float volume) {
+            main.post(() -> {
+                if (!voicesReady || voiceProbe == null || text == null || text.isEmpty()) return;
+                TtsService.applyVoice(voiceProbe, voice);
+                voiceProbe.setSpeechRate(rate);
+                Bundle p = new Bundle();
+                p.putFloat(TextToSpeech.Engine.KEY_PARAM_VOLUME, volume);
+                voiceProbe.speak(text, TextToSpeech.QUEUE_FLUSH, p, "preview");
+            });
+        }
+
         @JavascriptInterface public String getState() {
             return TtsService.instance == null ? "{\"active\":false,\"playing\":false}" : TtsService.stateJson;
         }
