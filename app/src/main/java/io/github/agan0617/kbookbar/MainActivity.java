@@ -18,6 +18,7 @@ import android.os.Looper;
 import android.os.PowerManager;
 import android.provider.Settings;
 import android.speech.tts.TextToSpeech;
+import android.view.WindowManager;
 import android.webkit.JavascriptInterface;
 import android.webkit.ValueCallback;
 import android.webkit.WebChromeClient;
@@ -112,8 +113,10 @@ public class MainActivity extends Activity {
         });
 
         TtsService.listener = json -> main.post(() -> {
+            keepScreenOn(json);
             if (web != null) web.evaluateJavascript("window.KBookNativeEvent&&window.KBookNativeEvent(" + json + ")", null);
         });
+        keepScreenOn(TtsService.stateJson);
         voiceProbe = new TextToSpeech(this, status -> {
             voicesReady = status == TextToSpeech.SUCCESS;
             // 引擎初始化完成時 Activity 可能已經關掉（web 已經 destroy），要先檢查
@@ -126,6 +129,7 @@ public class MainActivity extends Activity {
 
     @Override protected void onResume() {
         super.onResume();
+        keepScreenOn(TtsService.stateJson);
         // 上次沒載成功、現在有網路了：抓最新版重來
         if (pageFailed && isOnline() && web != null) {
             pageFailed = false;
@@ -143,6 +147,12 @@ public class MainActivity extends Activity {
         // 網頁的閱讀畫面用 history.pushState，返回鍵先交給網頁；已經在書架就退到背景（不結束，朗讀照常）
         if (web.canGoBack()) web.goBack();
         else moveTaskToBack(true);
+    }
+
+    /** 念的時候螢幕不自動鎖定（WebView 不支援網頁的 Wake Lock）；暫停、停止後照手機設定的時間鎖定 */
+    private void keepScreenOn(String stateJson) {
+        if (stateJson != null && stateJson.contains("\"playing\":true")) getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
+        else getWindow().clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
     }
 
     @Override protected void onDestroy() {
