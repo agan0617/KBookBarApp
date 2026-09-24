@@ -58,6 +58,10 @@ public class TtsService extends Service implements TextToSpeech.OnInitListener {
     private static final int NOTIF_ID = 1;
     private static final int AHEAD = 3; // 預先排進語音佇列的段數，段與段之間才不會有空檔
     private static final int MAX_CHUNK = 1500;
+    // 標題（章名、### 小節名）前後各停一下、念慢一點，聽的人才分得出那是標題不是內文
+    private static final int HEAD_GAP_MS = 700;
+    private static final float HEAD_RATE = 0.85f;
+    private static final String GAP_ID = "gap"; // 靜音片段的 id，parse 不出來，回呼一律忽略
 
     // ── 給 MainActivity 用的靜態入口（同一個 process） ──
     static volatile TtsService instance;
@@ -65,7 +69,7 @@ public class TtsService extends Service implements TextToSpeech.OnInitListener {
     static volatile String pendingStart;
     static volatile String stateJson = "{\"active\":false,\"playing\":false}";
 
-    private static class Chapter { String title; List<String> blocks = new ArrayList<>(); }
+    private static class Chapter { String title; List<String> blocks = new ArrayList<>(); java.util.Set<Integer> heads = new java.util.HashSet<>(); }
 
     private final Handler main = new Handler(Looper.getMainLooper());
     private TextToSpeech tts;
@@ -156,7 +160,7 @@ public class TtsService extends Service implements TextToSpeech.OnInitListener {
 
     // ─────────────────────────────── 對外操作 ───────────────────────────────
 
-    /** start 的 JSON：{bookId, bookTitle, chapters:[{title, blocks:[...]}], ch, b, rate, volume, voice, sleep} */
+    /** start 的 JSON：{bookId, bookTitle, chapters:[{title, blocks:[...], heads:[標題段的編號]}], ch, b, rate, volume, voice, sleep} */
     private void load(String json) {
         try {
             JSONObject o = new JSONObject(json);
@@ -170,6 +174,8 @@ public class TtsService extends Service implements TextToSpeech.OnInitListener {
                 chap.title = c.optString("title");
                 JSONArray bl = c.getJSONArray("blocks");
                 for (int k = 0; k < bl.length(); k++) chap.blocks.add(bl.getString(k));
+                JSONArray hd = c.optJSONArray("heads"); // 舊版網頁沒送，就全部當內文念
+                if (hd != null) for (int k = 0; k < hd.length(); k++) chap.heads.add(hd.optInt(k, -1));
                 chapters.add(chap);
             }
             ch = clamp(o.optInt("ch"), 0, chapters.size() - 1);
@@ -265,13 +271,19 @@ public class TtsService extends Service implements TextToSpeech.OnInitListener {
         while (qCh < chapters.size() && qB >= chapters.get(qCh).blocks.size()) { qCh++; qB = 0; }
         if (qCh >= chapters.size()) return false;
         List<String> chunks = split(chapters.get(qCh).blocks.get(qB));
+        boolean head = !chunks.isEmpty() && chapters.get(qCh).heads.contains(qB);
         if (chunks.isEmpty()) chunks.add("　");
         Bundle params = new Bundle();
         params.putFloat(TextToSpeech.Engine.KEY_PARAM_VOLUME, volume);
+        // 接著上一段念到標題：先停一下（剛按播放就從標題開始的不用停）
+        if (head && !flush) tts.playSilentUtterance(HEAD_GAP_MS, TextToSpeech.QUEUE_ADD, GAP_ID);
+        // 語速在 speak 當下就跟著這一句排進佇列，所以改完馬上改回來不影響前後句
+        if (head) tts.setSpeechRate(rate * HEAD_RATE);
         for (int s = 0; s < chunks.size(); s++) {
             String id = gen + "|" + qCh + "|" + qB + "|" + s + "|" + (s == chunks.size() - 1 ? 1 : 0);
             tts.speak(chunks.get(s), flush && s == 0 ? TextToSpeech.QUEUE_FLUSH : TextToSpeech.QUEUE_ADD, params, id);
         }
+        if (head) { tts.setSpeechRate(rate); tts.playSilentUtterance(HEAD_GAP_MS, TextToSpeech.QUEUE_ADD, GAP_ID); }
         qB++;
         return true;
     }
