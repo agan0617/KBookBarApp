@@ -255,6 +255,11 @@ public class MainActivity extends Activity {
             });
         }
 
+        /** 朗讀服務最後念到的位置 {bookId, ch, b, t, at}，服務停了也還在（1.7） */
+        @JavascriptInterface public String lastPos() {
+            return getSharedPreferences(TtsService.PREFS, MODE_PRIVATE).getString(TtsService.KEY_LAST, "");
+        }
+
         @JavascriptInterface public String getState() {
             return TtsService.instance == null ? "{\"active\":false,\"playing\":false}" : TtsService.stateJson;
         }

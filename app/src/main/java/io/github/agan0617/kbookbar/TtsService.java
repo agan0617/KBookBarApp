@@ -588,8 +588,28 @@ public class TtsService extends Service implements TextToSpeech.OnInitListener {
         try {
             JSONObject o = baseState();
             stateJson = o.toString();
+            saveLastPos();
             o.put("type", type);
             send(o.toString());
+        } catch (JSONException ignored) { }
+    }
+
+    static final String PREFS = "tts", KEY_LAST = "last";
+
+    /**
+     * 自己記住念到哪（1.7）：畫面被系統收掉時網頁收不到事件、網頁在背景時計時器又被節流，
+     * 進度只靠網頁存會停在開始聽的地方。網頁打開或回到前景時用 KBookNative.lastPos() 拿去比新舊。
+     */
+    private void saveLastPos() {
+        if (!active || bookId.isEmpty() || chapters.isEmpty()) return;
+        try {
+            JSONObject p = new JSONObject();
+            p.put("bookId", bookId);
+            p.put("ch", ch);
+            p.put("b", b);
+            p.put("t", ch >= 0 && ch < chapters.size() ? chapters.get(ch).title : "");
+            p.put("at", System.currentTimeMillis());
+            getSharedPreferences(PREFS, MODE_PRIVATE).edit().putString(KEY_LAST, p.toString()).apply();
         } catch (JSONException ignored) { }
     }
 
