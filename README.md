@@ -2,6 +2,8 @@
 
 [K書吧](https://github.com/agan0617/KBookBar)（讀 AI 寫的書的閱讀器）的 Android 外殼，解決**瀏覽器在背景會把朗讀停掉**的問題。
 
+<img src="docs/screenshot.jpg" width="300" alt="screenshot">
+
 - 整個畫面是一個 WebView，載入 https://agan0617.github.io/KBookBar/。書架、同步、閱讀設定都沿用網頁，網頁更新 App 不用重裝
 - 只有朗讀換掉：網頁偵測到 `window.KBookNative` 就把整本書的段落送進來，由 `TtsService` 用手機的語音引擎（優先 Google）在 **mediaPlayback 前景服務**裡念；切 App、關螢幕都會繼續
 - 通知欄、鎖定畫面、藍牙耳機都能播放／暫停／上一段／下一段；定時停止由原生計時
