@@ -528,6 +528,8 @@ public class TtsService extends Service implements TextToSpeech.OnInitListener {
                     .setAudioAttributes(new AudioAttributes.Builder()
                             .setUsage(AudioAttributes.USAGE_MEDIA)
                             .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH).build())
+                    // 導航語音插話時暫停、講完接著念；沒設的話系統會自己把音量壓小、不通知 App（Ken 2026-10-13 指定）
+                    .setWillPauseWhenDucked(true)
                     .setOnAudioFocusChangeListener(focusListener, main)
                     .build();
         }

@@ -34,7 +34,7 @@ App 不綁任何人的書：裝好之後連上**你自己的**私有書架 repo�
 | 檔案 | 內容 |
 |---|---|
 | `MainActivity.java` | WebView、JS 橋接（`KBookNative`）、檔案挑選器、外部連結交給瀏覽器、通知與省電權限 |
-| `TtsService.java` | 前景服務：語音佇列（預排 3 段避免段間空檔）、MediaSession、通知、音訊焦點、耳機拔出暫停、定時停止 |
+| `TtsService.java` | 前景服務：語音佇列（預排 3 段避免段間空檔）、MediaSession、通知、音訊焦點（導航語音等插話時暫停、講完接著念）、耳機拔出暫停、定時停止 |
 | `CloudTts.java` | 雲端語音：Azure 語音 REST API 合成 mp3（快取、太多請求時重試）、跟手機語音引擎同樣用法的播放佇列（MediaPlayer；合成時依「雲端語音速度」放慢，語速設定用播放速度調） |
 
 網頁那一側的橋接在 KBookBar 的 `index.html`（搜尋 `KBookNative`）：`start` 送 `{bookId, bookTitle, chapters:[{title, blocks}], ch, b, rate, volume, voice, sleep}`，App 念到哪一段用 `window.KBookNativeEvent({type:'pos', ch, b, playing, …})` 回報。段落切法要跟網頁 `openChapter` 取 `R.blocks` 的規則一致。
