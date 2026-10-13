@@ -42,6 +42,8 @@ final class CloudTts {
     private static final String PREFS = "cloud";
     static final String DEFAULT_REGION = "eastasia";
     private static final String FORMAT = "audio-24khz-48kbitrate-mono-mp3";
+    // Azure 語音本身比手機語音快：合成時就放慢（比播放時放慢自然），App 的語速設定再疊在上面
+    private static final String BASE_RATE = "0.9";
     private static final long CACHE_MAX = 300L * 1024 * 1024; // 快取超過就刪最舊的（重聽同一段不用再花額度）
 
     /** {Azure 語音名稱, 語系, 顯示名稱} */
@@ -138,13 +140,13 @@ final class CloudTts {
         String name = voice.substring(PREFIX.length());
         File dir = new File(c.getCacheDir(), "cloudtts");
         if (!dir.isDirectory() && !dir.mkdirs()) throw new CloudError(CloudError.BAD, "快取資料夾建不起來");
-        File f = new File(dir, sha1(name + "\n" + text) + ".mp3");
+        File f = new File(dir, sha1(name + "\n" + BASE_RATE + "\n" + text) + ".mp3");
         if (f.length() > 0) { f.setLastModified(System.currentTimeMillis()); return f; }
         CloudError held = holdErr;
         if (held != null && System.currentTimeMillis() < holdUntil) throw new CloudError(held.kind, held.getMessage());
 
         String lang = name.substring(0, 5);
-        byte[] body = ("<speak version='1.0' xml:lang='" + lang + "'><voice name='" + name + "'>" + esc(text) + "</voice></speak>")
+        byte[] body = ("<speak version='1.0' xml:lang='" + lang + "'><voice name='" + name + "'><prosody rate='" + BASE_RATE + "'>" + esc(text) + "</prosody></voice></speak>")
                 .getBytes(StandardCharsets.UTF_8);
         String url = base(region(c)) + "/cognitiveservices/v1", key = key(c);
         CloudError last = null;
