@@ -43,7 +43,7 @@ final class CloudTts {
     static final String DEFAULT_REGION = "eastasia";
     private static final String FORMAT = "audio-24khz-48kbitrate-mono-mp3";
     // Azure 語音本身比手機語音快：合成時就放慢（比播放時放慢自然），App 的語速設定再疊在上面
-    private static final String BASE_RATE = "0.9";
+    private static final String BASE_RATE = "0.85";
     private static final long CACHE_MAX = 300L * 1024 * 1024; // 快取超過就刪最舊的（重聽同一段不用再花額度）
 
     /** {Azure 語音名稱, 語系, 顯示名稱} */
