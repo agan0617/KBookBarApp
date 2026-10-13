@@ -37,7 +37,7 @@ import java.util.regex.Pattern;
 
 /**
  * 朗讀用的前景服務。瀏覽器的 speechSynthesis 在 Android 背景會被停掉，所以把朗讀搬到這裡：
- * 手機的語音引擎（優先 Google）＋ mediaPlayback 前景服務＋ MediaSession（通知欄、鎖定畫面、藍牙耳機）。
+ * 手機的語音引擎（優先 Google）或雲端語音（{@link CloudTts}，1.8）＋ mediaPlayback 前景服務＋ MediaSession（通知欄、鎖定畫面、藍牙耳機）。
  *
  * 網頁（K書吧）透過 MainActivity 的 JS bridge 把整本書的段落送進來（start），之後念到哪一段
  * 用 {@link Listener} 回報給網頁。網頁不在前景時照樣念，回到前景再同步畫面。
@@ -58,6 +58,7 @@ public class TtsService extends Service implements TextToSpeech.OnInitListener {
     private static final int NOTIF_ID = 1;
     private static final int AHEAD = 3; // 預先排進語音佇列的段數，段與段之間才不會有空檔
     private static final int MAX_CHUNK = 1500;
+    private static final int CLOUD_CHUNK = 300; // 雲端語音一次送短一點：第一句早點出聲，跳段時白合成的也少
     // 標題（章名、### 小節名）念慢一點；網頁沒送 pre（舊網頁）時，標題前後各停一下
     private static final int HEAD_GAP_MS = 700;
     private static final float HEAD_RATE = 0.85f;
@@ -79,6 +80,8 @@ public class TtsService extends Service implements TextToSpeech.OnInitListener {
     private final Handler main = new Handler(Looper.getMainLooper());
     private TextToSpeech tts;
     private boolean ttsReady;
+    private CloudTts.Player cloud;
+    private boolean cloudOff; // 雲端語音這一輪用不了（額度用完、斷網），改用手機語音；下次按播放、換語音再試
     private MediaSession session;
     private AudioManager audio;
     private AudioFocusRequest focusReq;
@@ -117,6 +120,11 @@ public class TtsService extends Service implements TextToSpeech.OnInitListener {
             @Override public void onStop() { stopAll(); }
         });
         tts = new TextToSpeech(this, this, GOOGLE_TTS);
+        cloud = new CloudTts.Player(this, new CloudTts.Player.Callback() {
+            @Override public void onStart(String id) { onUtterStart(id); }
+            @Override public void onDone(String id) { onUtterDone(id); }
+            @Override public void onError(String id, CloudTts.CloudError e) { onCloudError(id, e); }
+        });
     }
 
     @Override public int onStartCommand(Intent intent, int flags, int startId) {
@@ -138,6 +146,7 @@ public class TtsService extends Service implements TextToSpeech.OnInitListener {
     @Override public void onDestroy() {
         main.removeCallbacksAndMessages(null);
         if (tts != null) { tts.stop(); tts.shutdown(); }
+        cloud.release();
         abandonFocus();
         unregisterNoisy();
         if (wake.isHeld()) wake.release();
@@ -160,7 +169,7 @@ public class TtsService extends Service implements TextToSpeech.OnInitListener {
             @Override public void onStop(String id, boolean interrupted) { }
         });
         applyVoice();
-        if (playing) restart();
+        if (playing && !useCloud()) restart(); // 雲端語音不用等手機引擎，已經在念了
     }
 
     // ─────────────────────────────── 對外操作 ───────────────────────────────
@@ -190,6 +199,7 @@ public class TtsService extends Service implements TextToSpeech.OnInitListener {
             rate = (float) o.optDouble("rate", 1);
             volume = (float) o.optDouble("volume", 1);
             voiceName = o.optString("voice", "");
+            cloudOff = false;
             applyVoice();
             setSleep(o.optString("sleep", "0"));
             active = true;
@@ -205,6 +215,7 @@ public class TtsService extends Service implements TextToSpeech.OnInitListener {
         if (!playing) return;
         playing = false; gen++;
         if (tts != null) tts.stop();
+        cloud.stop();
         if (wake.isHeld()) wake.release();
         unregisterNoisy();
         updateSession(); updateNotification(); emitPos();
@@ -228,6 +239,7 @@ public class TtsService extends Service implements TextToSpeech.OnInitListener {
     void stopAll() {
         playing = false; active = false; gen++;
         if (tts != null) tts.stop();
+        cloud.stop();
         main.removeCallbacks(sleepTask); sleepAt = 0; stopAtChEnd = false;
         emitPos();
         stopForeground(STOP_FOREGROUND_REMOVE);
@@ -236,7 +248,12 @@ public class TtsService extends Service implements TextToSpeech.OnInitListener {
 
     void setRate(float r) { rate = r; if (playing) restart(); }
     void setVolume(float v) { volume = v; if (playing) restart(); }
-    void setVoice(String name) { voiceName = name == null ? "" : name; applyVoice(); if (playing) restart(); }
+    void setVoice(String name) { voiceName = name == null ? "" : name; cloudOff = false; applyVoice(); if (playing) restart(); }
+
+    /** 雲端語音的金鑰剛設定好（MainActivity 的設定框） */
+    void cloudConfigured() { cloudOff = false; if (playing && CloudTts.isCloud(voiceName)) restart(); }
+
+    private boolean useCloud() { return CloudTts.isCloud(voiceName) && !cloudOff && CloudTts.configured(this); }
 
     /** "0"＝取消、"ch"＝念完這章、其他＝分鐘數 */
     void setSleep(String v) {
@@ -264,9 +281,12 @@ public class TtsService extends Service implements TextToSpeech.OnInitListener {
     /** 清空佇列，從目前這一段開頭重新排 */
     private void restart() {
         gen++;
-        if (!ttsReady) { updateSession(); emitPos(); return; } // 引擎好了 onInit 會再叫一次
-        tts.stop();
-        tts.setSpeechRate(rate);
+        if (ttsReady) tts.stop();
+        cloud.stop();
+        if (!useCloud()) {
+            if (!ttsReady) { updateSession(); emitPos(); return; } // 引擎好了 onInit 會再叫一次
+            tts.setSpeechRate(rate);
+        }
         qCh = ch; qB = b;
         boolean first = true;
         for (int i = 0; i < AHEAD; i++) { if (!enqueueNext(first)) break; first = false; }
@@ -277,7 +297,8 @@ public class TtsService extends Service implements TextToSpeech.OnInitListener {
     private boolean enqueueNext(boolean flush) {
         while (qCh < chapters.size() && qB >= chapters.get(qCh).blocks.size()) { qCh++; qB = 0; }
         if (qCh >= chapters.size()) return false;
-        List<String> chunks = split(chapters.get(qCh).blocks.get(qB));
+        boolean cl = useCloud();
+        List<String> chunks = split(chapters.get(qCh).blocks.get(qB), cl ? CLOUD_CHUNK : MAX_CHUNK);
         boolean head = !chunks.isEmpty() && chapters.get(qCh).heads.contains(qB);
         if (chunks.isEmpty()) chunks.add("　");
         Bundle params = new Bundle();
@@ -289,7 +310,18 @@ public class TtsService extends Service implements TextToSpeech.OnInitListener {
             int gap = chap.pre != null ? (qB < chap.pre.length ? chap.pre[qB] : 0)
                     : (head || (qB > 0 && chap.heads.contains(qB - 1))) ? HEAD_GAP_MS : 0;
             gap = Math.round(gap / (float) Math.sqrt(Math.max(1f, rate))); // 語速快時停頓跟著縮短，但縮得比語速慢
-            if (gap > 0) tts.playSilentUtterance(gap, TextToSpeech.QUEUE_ADD, GAP_ID);
+            if (gap > 0) {
+                if (cl) cloud.silence(gap, GAP_ID);
+                else tts.playSilentUtterance(gap, TextToSpeech.QUEUE_ADD, GAP_ID);
+            }
+        }
+        if (cl) {
+            for (int s = 0; s < chunks.size(); s++) {
+                String id = gen + "|" + qCh + "|" + qB + "|" + s + "|" + (s == chunks.size() - 1 ? 1 : 0);
+                cloud.speak(voiceName, chunks.get(s), head ? rate * HEAD_RATE : rate, volume, id, flush && s == 0);
+            }
+            qB++;
+            return true;
         }
         // 語速在 speak 當下就跟著這一句排進佇列，所以改完馬上改回來不影響前後句
         if (head) tts.setSpeechRate(rate * HEAD_RATE);
@@ -308,6 +340,19 @@ public class TtsService extends Service implements TextToSpeech.OnInitListener {
         int[] p = parse(id); if (p == null || p[0] != gen || !playing) return;
         if (++errs > 3) { errs = 0; pause(); emitError("朗讀一直出錯，可能是這個語音還沒下載好或沒有網路，換個語音試試"); return; }
         onUtterDone(id);
+    }
+
+    /**
+     * 雲端語音出錯：金鑰不對、額度用完、斷網都是每一句都會錯，直接改用手機語音從這一段重念（金鑰不對另外請
+     * MainActivity 跳設定框）；只有這一段合成不了（BAD）才跟手機語音出錯一樣跳過這段
+     */
+    private void onCloudError(String id, CloudTts.CloudError e) {
+        int[] p = parse(id); if (p == null || p[0] != gen || !playing) return;
+        if (e.kind == CloudTts.CloudError.BAD) { onUtterError(id); return; }
+        cloudOff = true;
+        if (e.kind == CloudTts.CloudError.AUTH) emit("cloudKey");
+        emitError("雲端語音用不了：" + e.getMessage() + "。先改用手機語音念");
+        restart();
     }
 
     private void onUtterStart(String id) {
@@ -339,18 +384,18 @@ public class TtsService extends Service implements TextToSpeech.OnInitListener {
     private static final Pattern SENTENCE = Pattern.compile("[^。！？!?；;…]+[。！？!?；;…]*[」』”’\"'）)]*|[。！？!?；;…]+");
 
     /** 太長的段落照句子切開（引擎單次有長度上限） */
-    private static List<String> split(String text) {
+    private static List<String> split(String text, int max) {
         List<String> out = new ArrayList<>();
         if (text == null) return out;
         text = text.trim();
         if (text.isEmpty()) return out;
-        if (text.length() <= MAX_CHUNK) { out.add(text); return out; }
+        if (text.length() <= max) { out.add(text); return out; }
         StringBuilder buf = new StringBuilder();
         Matcher m = SENTENCE.matcher(text);
         while (m.find()) {
             String s = m.group();
-            if (buf.length() + s.length() > MAX_CHUNK && buf.length() > 0) { out.add(buf.toString()); buf.setLength(0); }
-            while (s.length() > MAX_CHUNK) { out.add(s.substring(0, MAX_CHUNK)); s = s.substring(MAX_CHUNK); }
+            if (buf.length() + s.length() > max && buf.length() > 0) { out.add(buf.toString()); buf.setLength(0); }
+            while (s.length() > max) { out.add(s.substring(0, max)); s = s.substring(max); }
             buf.append(s);
         }
         if (buf.length() > 0) out.add(buf.toString());
@@ -372,6 +417,7 @@ public class TtsService extends Service implements TextToSpeech.OnInitListener {
 
     private void applyVoice() {
         if (!ttsReady) return;
+        if (CloudTts.isCloud(voiceName)) { applyVoice(tts, ""); return; } // 手機語音只在雲端用不了時接手，用台灣國語預設
         if (!applyVoice(tts, voiceName)) emitError("選的語音還沒下載好，先用預設語音念；下載完成後再選一次");
     }
 

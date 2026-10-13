@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 只有 debug 版：允許明碼連到模擬器的主機（10.0.2.2），測雲端語音時把區域填成本機假伺服器的網址 -->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <application android:networkSecurityConfig="@xml/net_debug" />
+</manifest>

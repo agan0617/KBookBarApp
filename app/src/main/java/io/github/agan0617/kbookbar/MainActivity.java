@@ -18,7 +18,11 @@ import android.os.Looper;
 import android.os.PowerManager;
 import android.provider.Settings;
 import android.speech.tts.TextToSpeech;
+import android.text.InputType;
 import android.view.WindowManager;
+import android.widget.EditText;
+import android.widget.LinearLayout;
+import android.widget.TextView;
 import android.webkit.JavascriptInterface;
 import android.webkit.ValueCallback;
 import android.webkit.WebChromeClient;
@@ -45,6 +49,8 @@ public class MainActivity extends Activity {
     private WebView web;
     private ValueCallback<Uri[]> fileCb;
     private TextToSpeech voiceProbe; // 只用來列語音清單（服務還沒啟動時也要列得出來）
+    private CloudTts.Player previewCloud; // 修正讀音時用雲端語音試聽
+    private AlertDialog keyDialog;
     private volatile boolean voicesReady;
     private boolean pageFailed;
 
@@ -113,6 +119,8 @@ public class MainActivity extends Activity {
         });
 
         TtsService.listener = json -> main.post(() -> {
+            // 雲端語音的金鑰被拒絕：跳設定框重貼（不轉給網頁，網頁另外會收到 error 的提示）
+            if (json.contains("\"type\":\"cloudKey\"")) { showKeyDialog("Azure 拒絕了這組金鑰，請確認金鑰與區域後重貼。"); return; }
             keepScreenOn(json);
             if (web != null) web.evaluateJavascript("window.KBookNativeEvent&&window.KBookNativeEvent(" + json + ")", null);
         });
@@ -158,6 +166,8 @@ public class MainActivity extends Activity {
     @Override protected void onDestroy() {
         TtsService.listener = null;
         if (voiceProbe != null) voiceProbe.shutdown();
+        if (previewCloud != null) previewCloud.release();
+        if (keyDialog != null) keyDialog.dismiss();
         if (web != null) { web.destroy(); web = null; }
         super.onDestroy();
     }
@@ -207,6 +217,74 @@ public class MainActivity extends Activity {
         }
     }
 
+    private void toWeb(String js) { if (web != null) web.evaluateJavascript("window.KBookNativeEvent&&window.KBookNativeEvent(" + js + ")", null); }
+
+    private void toast(String msg) {
+        try { toWeb(new JSONObject().put("type", "error").put("message", msg).toString()); } catch (Exception ignored) { }
+    }
+
+    /**
+     * 雲端語音的金鑰設定框（1.8）：第一次選雲端語音、或金鑰被拒絕時跳出來。按儲存先拿金鑰試一次 Azure，
+     * 對了才存；存好就通知網頁重列語音、朗讀服務改用雲端語音。
+     */
+    private void showKeyDialog(String note) {
+        if (isFinishing() || (keyDialog != null && keyDialog.isShowing())) return;
+        int pad = Math.round(20 * getResources().getDisplayMetrics().density);
+        LinearLayout box = new LinearLayout(this);
+        box.setOrientation(LinearLayout.VERTICAL);
+        box.setPadding(pad, pad / 2, pad, 0);
+        TextView msg = new TextView(this);
+        msg.setText((note != null ? note + "\n\n" : "")
+                + "雲端語音用的是 Azure 語音服務。到 Azure 入口網站的語音服務資源 →「金鑰與端點」，"
+                + "複製「金鑰 1」和「位置/區域」貼在這裡。金鑰只存在這支手機。");
+        box.addView(msg);
+        EditText key = new EditText(this);
+        key.setHint("金鑰 1");
+        key.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_PASSWORD);
+        key.setSingleLine(true);
+        box.addView(key);
+        EditText region = new EditText(this);
+        region.setHint("區域，例如 eastasia");
+        region.setText(CloudTts.region(this));
+        region.setSingleLine(true);
+        box.addView(region);
+        AlertDialog.Builder b = new AlertDialog.Builder(this)
+                .setTitle("設定雲端語音")
+                .setView(box)
+                .setPositiveButton("儲存", null)
+                .setNegativeButton("取消", null);
+        if (CloudTts.configured(this)) {
+            key.setHint("已儲存，要換才需要重貼");
+            b.setNeutralButton("清除金鑰", (d, w) -> { CloudTts.clear(this); toWeb("{type:'voices'}"); toast("已清除雲端語音的金鑰"); });
+        }
+        keyDialog = b.create();
+        keyDialog.setOnShowListener(d -> keyDialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener(v -> {
+            String k = key.getText().toString().trim();
+            if (k.isEmpty()) k = CloudTts.key(this);
+            String r = region.getText().toString().trim().toLowerCase(java.util.Locale.ROOT).replace(" ", "");
+            if (r.isEmpty()) r = CloudTts.DEFAULT_REGION;
+            if (k.isEmpty()) { msg.setText("請貼上金鑰。"); return; }
+            String fk = k, fr = r;
+            v.setEnabled(false);
+            msg.setText("檢查金鑰中…");
+            new Thread(() -> {
+                String err = null;
+                try { CloudTts.check(fk, fr); } catch (CloudTts.CloudError e) { err = e.getMessage(); }
+                String fe = err;
+                main.post(() -> {
+                    if (keyDialog == null || !keyDialog.isShowing()) return;
+                    if (fe != null) { msg.setText("沒有成功：" + fe + "。確認後再按一次儲存。"); v.setEnabled(true); return; }
+                    CloudTts.save(this, fk, fr);
+                    keyDialog.dismiss();
+                    toWeb("{type:'voices'}");
+                    toast("雲端語音設定好了");
+                    TtsService t = TtsService.instance; if (t != null) t.cloudConfigured();
+                });
+            }).start();
+        }));
+        keyDialog.show();
+    }
+
     /** 給網頁呼叫的介面（window.KBookNative）。這些方法跑在 JavaBridge 執行緒，實際動作丟回主執行緒。 */
     private class Bridge {
         @JavascriptInterface public String version() { return BuildConfigVersion.NAME; }
@@ -227,6 +305,8 @@ public class MainActivity extends Activity {
         @JavascriptInterface public void setVolume(float v) { main.post(() -> { TtsService t = TtsService.instance; if (t != null) t.setVolume(v); }); }
         @JavascriptInterface public void setVoice(String id) {
             main.post(() -> {
+                // 選雲端語音但還沒設定金鑰：先跳設定框（這段時間朗讀服務先用手機語音念）
+                if (CloudTts.isCloud(id) && !CloudTts.configured(MainActivity.this)) showKeyDialog(null);
                 // 選到還沒下載的語音：帶去 Google 語音的下載頁
                 if (id != null && !id.isEmpty() && voiceProbe != null) {
                     try {
@@ -246,8 +326,20 @@ public class MainActivity extends Activity {
         /** 試聽一小段（修正讀音時用）：用列語音清單的那個引擎念，不動朗讀服務 */
         @JavascriptInterface public void preview(String text, String voice, float rate, float volume) {
             main.post(() -> {
-                if (!voicesReady || voiceProbe == null || text == null || text.isEmpty()) return;
-                TtsService.applyVoice(voiceProbe, voice);
+                if (text == null || text.isEmpty()) return;
+                if (CloudTts.isCloud(voice) && CloudTts.configured(MainActivity.this)) {
+                    if (voiceProbe != null) voiceProbe.stop();
+                    if (previewCloud == null) previewCloud = new CloudTts.Player(MainActivity.this, new CloudTts.Player.Callback() {
+                        @Override public void onStart(String id) { }
+                        @Override public void onDone(String id) { }
+                        @Override public void onError(String id, CloudTts.CloudError e) { toast("雲端語音試聽失敗：" + e.getMessage()); }
+                    });
+                    previewCloud.speak(voice, text, rate, volume, "preview", true);
+                    return;
+                }
+                if (!voicesReady || voiceProbe == null) return;
+                if (previewCloud != null) previewCloud.stop();
+                TtsService.applyVoice(voiceProbe, CloudTts.isCloud(voice) ? "" : voice);
                 voiceProbe.setSpeechRate(rate);
                 Bundle p = new Bundle();
                 p.putFloat(TextToSpeech.Engine.KEY_PARAM_VOLUME, volume);
@@ -264,10 +356,20 @@ public class MainActivity extends Activity {
             return TtsService.instance == null ? "{\"active\":false,\"playing\":false}" : TtsService.stateJson;
         }
 
+        /** 雲端語音排最前面，後面接手機語音引擎的清單（引擎還沒好就只有雲端的） */
         @JavascriptInterface public String getVoices() {
-            if (!voicesReady || voiceProbe == null) return "[]";
-            return TtsService.voicesJson(voiceProbe);
+            org.json.JSONArray all = CloudTts.voices(MainActivity.this);
+            if (voicesReady && voiceProbe != null) {
+                try {
+                    org.json.JSONArray phone = new org.json.JSONArray(TtsService.voicesJson(voiceProbe));
+                    for (int i = 0; i < phone.length(); i++) all.put(phone.get(i));
+                } catch (Exception ignored) { }
+            }
+            return all.toString();
         }
+
+        /** 換或清除雲端語音的金鑰（網頁朗讀設定的「雲端語音金鑰…」） */
+        @JavascriptInterface public void cloudSetup() { main.post(() -> showKeyDialog(null)); }
 
         /** 診斷用：引擎回報的全部語音（含沒安裝的）與手機上有哪些語音引擎 */
         @JavascriptInterface public String diag() {
