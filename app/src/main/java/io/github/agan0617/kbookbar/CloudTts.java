@@ -42,8 +42,9 @@ final class CloudTts {
     private static final String PREFS = "cloud";
     static final String DEFAULT_REGION = "eastasia";
     private static final String FORMAT = "audio-24khz-48kbitrate-mono-mp3";
-    // Azure 語音本身比手機語音快：合成時就放慢（比播放時放慢自然），App 的語速設定再疊在上面
-    private static final String BASE_RATE = "0.85";
+    // Azure 語音本身比手機語音快：合成時就放慢（比播放時放慢自然），App 的語速設定再疊在上面。
+    // 倍率是網頁朗讀設定的「雲端語音速度」（1.11），存在這支手機；修正讀音的試聽也用它
+    static final float DEFAULT_BASE_RATE = 0.85f;
     private static final long CACHE_MAX = 300L * 1024 * 1024; // 快取超過就刪最舊的（重聽同一段不用再花額度）
 
     /** {Azure 語音名稱, 語系, 顯示名稱} */
@@ -67,6 +68,8 @@ final class CloudTts {
     static boolean configured(Context c) { return !key(c).isEmpty(); }
     static void save(Context c, String key, String region) { holdUntil = 0; prefs(c).edit().putString("key", key).putString("region", region).apply(); }
     static void clear(Context c) { prefs(c).edit().remove("key").apply(); }
+    static float baseRate(Context c) { return prefs(c).getFloat("baseRate", DEFAULT_BASE_RATE); }
+    static void setBaseRate(Context c, float r) { prefs(c).edit().putFloat("baseRate", Math.max(0.5f, Math.min(1.5f, r))).apply(); }
 
     /** 區域（eastasia）換成網址；填完整網址的話照用（測試時指到本機的假伺服器） */
     private static String base(String region) {
@@ -136,17 +139,17 @@ final class CloudTts {
     }
 
     /** 一段文字合成成 mp3（在背景執行緒呼叫）。合成過的直接拿快取；太多請求、網路斷了會稍等再試兩次 */
-    static File synth(Context c, String voice, String text) throws IOException {
+    static File synth(Context c, String voice, String text, String rate) throws IOException {
         String name = voice.substring(PREFIX.length());
         File dir = new File(c.getCacheDir(), "cloudtts");
         if (!dir.isDirectory() && !dir.mkdirs()) throw new CloudError(CloudError.BAD, "快取資料夾建不起來");
-        File f = new File(dir, sha1(name + "\n" + BASE_RATE + "\n" + text) + ".mp3");
+        File f = new File(dir, sha1(name + "\n" + rate + "\n" + text) + ".mp3");
         if (f.length() > 0) { f.setLastModified(System.currentTimeMillis()); return f; }
         CloudError held = holdErr;
         if (held != null && System.currentTimeMillis() < holdUntil) throw new CloudError(held.kind, held.getMessage());
 
         String lang = name.substring(0, 5);
-        byte[] body = ("<speak version='1.0' xml:lang='" + lang + "'><voice name='" + name + "'><prosody rate='" + BASE_RATE + "'>" + esc(text) + "</prosody></voice></speak>")
+        byte[] body = ("<speak version='1.0' xml:lang='" + lang + "'><voice name='" + name + "'><prosody rate='" + rate + "'>" + esc(text) + "</prosody></voice></speak>")
                 .getBytes(StandardCharsets.UTF_8);
         String url = base(region(c)) + "/cognitiveservices/v1", key = key(c);
         CloudError last = null;
@@ -252,11 +255,12 @@ final class CloudTts {
             it.id = id; it.voice = voice; it.text = text == null ? "" : text.trim();
             it.speed = speed; it.volume = volume;
             if (!it.text.isEmpty()) {
-                String k = it.voice + "\n" + it.text;
+                String rate = String.format(java.util.Locale.ROOT, "%.2f", baseRate(ctx));
+                String k = it.voice + "\n" + rate + "\n" + it.text;
                 Future<File> old = inflight.get(k);
                 if (old != null && old.isDone()) inflight.remove(k, old); // 已經送完的（成功的會在快取裡）
                 it.audio = inflight.computeIfAbsent(k, x -> synthPool.submit(() -> {
-                    try { return synth(ctx, it.voice, it.text); } finally { inflight.remove(x); }
+                    try { return synth(ctx, it.voice, it.text, rate); } finally { inflight.remove(x); }
                 }));
             }
             add(it);

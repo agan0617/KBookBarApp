@@ -321,6 +321,13 @@ public class MainActivity extends Activity {
                 TtsService t = TtsService.instance; if (t != null) t.setVoice(id);
             });
         }
+        /** 雲端語音速度（合成時的倍率，1.11）；朗讀服務沒在跑也先存起來，試聽和下次朗讀都用它 */
+        @JavascriptInterface public void setCloudRate(float r) {
+            main.post(() -> {
+                CloudTts.setBaseRate(MainActivity.this, r);
+                TtsService t = TtsService.instance; if (t != null) t.setCloudRate(r);
+            });
+        }
         @JavascriptInterface public void setSleep(String v) { main.post(() -> { TtsService t = TtsService.instance; if (t != null) t.setSleep(v); }); }
 
         /** 試聽一小段（修正讀音時用）：用列語音清單的那個引擎念，不動朗讀服務 */

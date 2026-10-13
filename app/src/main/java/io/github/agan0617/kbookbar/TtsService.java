@@ -199,6 +199,7 @@ public class TtsService extends Service implements TextToSpeech.OnInitListener {
             rate = (float) o.optDouble("rate", 1);
             volume = (float) o.optDouble("volume", 1);
             voiceName = o.optString("voice", "");
+            if (o.has("cloudRate")) CloudTts.setBaseRate(this, (float) o.optDouble("cloudRate", CloudTts.DEFAULT_BASE_RATE));
             cloudOff = false;
             applyVoice();
             setSleep(o.optString("sleep", "0"));
@@ -249,6 +250,9 @@ public class TtsService extends Service implements TextToSpeech.OnInitListener {
     void setRate(float r) { rate = r; if (playing) restart(); }
     void setVolume(float v) { volume = v; if (playing) restart(); }
     void setVoice(String name) { voiceName = name == null ? "" : name; cloudOff = false; applyVoice(); if (playing) restart(); }
+
+    /** 雲端語音速度改了（網頁朗讀設定）：正在用雲端語音念就從這一段重排 */
+    void setCloudRate(float r) { CloudTts.setBaseRate(this, r); if (playing && useCloud()) restart(); }
 
     /** 雲端語音的金鑰剛設定好（MainActivity 的設定框） */
     void cloudConfigured() { cloudOff = false; if (playing && CloudTts.isCloud(voiceName)) restart(); }
