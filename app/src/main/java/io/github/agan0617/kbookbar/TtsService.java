@@ -59,6 +59,7 @@ public class TtsService extends Service implements TextToSpeech.OnInitListener {
     private static final int AHEAD = 3; // 預先排進語音佇列的段數，段與段之間才不會有空檔
     private static final int MAX_CHUNK = 1500;
     private static final int CLOUD_CHUNK = 300; // 雲端語音一次送短一點：第一句早點出聲，跳段時白合成的也少
+    private static final int MAX_VOICES = 40; // 一個 SSML 裡的聲音片段上限（Azure 上限 50）
     // 標題（章名、### 小節名）念慢一點；網頁沒送 pre（舊網頁）時，標題前後各停一下
     private static final int HEAD_GAP_MS = 700;
     private static final float HEAD_RATE = 0.85f;
@@ -354,8 +355,12 @@ public class TtsService extends Service implements TextToSpeech.OnInitListener {
             }
         }
         if (cl) {
+            // 雲端語音：旁白、對白（不同聲音）合在同一個請求、同一個音檔（1.14），一個音檔最多約 CLOUD_CHUNK 字；
+            // 分開合成的話每換一次聲音就換一個音檔，對白前都會頓一下
+            List<List<CloudTts.Part>> groups = new ArrayList<>();
+            List<CloudTts.Part> cur = new ArrayList<>();
+            int len = 0;
             for (int s = 0; s < chunks.size(); s++) {
-                String id = gen + "|" + qCh + "|" + qB + "|" + s + "|" + (s == chunks.size() - 1 ? 1 : 0);
                 // 對白：照雲端那份配置換聲音、音高；指定的不是雲端語音就用旁白的聲音
                 JSONObject e = roleCfg(castCloud, roles.get(s));
                 String v = voiceName; float pitch = 1f;
@@ -364,7 +369,17 @@ public class TtsService extends Service implements TextToSpeech.OnInitListener {
                     String rv = e.optString("v", "");
                     if (CloudTts.isCloud(rv)) v = rv;
                 }
-                cloud.speak(v, chunks.get(s), head ? rate * HEAD_RATE : rate, volume, id, flush && s == 0, pitch);
+                String t = chunks.get(s);
+                if (!cur.isEmpty() && (len + t.length() > CLOUD_CHUNK || cur.size() >= MAX_VOICES)) { groups.add(cur); cur = new ArrayList<>(); len = 0; }
+                CloudTts.Part last = cur.isEmpty() ? null : cur.get(cur.size() - 1);
+                if (last != null && last.voice.equals(v) && last.pitch == pitch) cur.set(cur.size() - 1, new CloudTts.Part(v, last.text + t, pitch));
+                else cur.add(new CloudTts.Part(v, t, pitch));
+                len += t.length();
+            }
+            if (!cur.isEmpty()) groups.add(cur);
+            for (int s = 0; s < groups.size(); s++) {
+                String id = gen + "|" + qCh + "|" + qB + "|" + s + "|" + (s == groups.size() - 1 ? 1 : 0);
+                cloud.speakMulti(groups.get(s), head ? rate * HEAD_RATE : rate, volume, id, flush && s == 0);
             }
             qB++;
             return true;

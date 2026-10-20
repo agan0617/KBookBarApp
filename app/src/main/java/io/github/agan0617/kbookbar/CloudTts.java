@@ -22,7 +22,9 @@ import java.net.URL;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.util.ArrayDeque;
+import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.List;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -57,6 +59,10 @@ final class CloudTts {
             {"zh-CN-YunyiMultilingualNeural", "zh-TW", "雲逸（男，多語言講台灣國語）"},
             {"zh-CN-YunxiNeural", "zh-CN", "雲希（男，大陸腔）"},
             {"zh-CN-YunzeNeural", "zh-CN", "雲澤（男，大陸腔，偏老）"},
+            // 對白換聲音的女角（1.14，Ken 2026-10-20 選的）：女角曉曉、少女曉伊、老女曉秋
+            {"zh-CN-XiaoxiaoNeural", "zh-CN", "曉曉（女，大陸腔）"},
+            {"zh-CN-XiaoyiNeural", "zh-CN", "曉伊（女，大陸腔，少女）"},
+            {"zh-CN-XiaoqiuNeural", "zh-CN", "曉秋（女，大陸腔，偏年長）"},
             {"ja-JP-NanamiNeural", "ja-JP", "七海（女）"},
             {"ja-JP-KeitaNeural", "ja-JP", "圭太（男）"},
     };
@@ -149,22 +155,51 @@ final class CloudTts {
         return pct == 0 ? "" : (pct > 0 ? "+" : "") + pct + "%";
     }
 
+    /** 一個聲音的 SSML 片段；多語言聲音（雲逸）用台灣國語念：包一層 <lang>，不然它照自己的語系（大陸腔）念 */
+    private static String voiceXml(String name, String rate, String pitch, String text) {
+        String inner = name.contains("Multilingual") ? "<lang xml:lang='zh-TW'>" + esc(text) + "</lang>" : esc(text);
+        return "<voice name='" + name + "'><prosody rate='" + rate + "'" + (pitch.isEmpty() ? "" : " pitch='" + pitch + "'") + ">" + inner + "</prosody></voice>";
+    }
+
     /** 一段文字合成成 mp3（在背景執行緒呼叫）。合成過的直接拿快取；太多請求、網路斷了會稍等再試兩次 */
     static File synth(Context c, String voice, String text, String rate, String pitch) throws IOException {
         String name = voice.substring(PREFIX.length());
+        String ssml = "<speak version='1.0' xmlns='http://www.w3.org/2001/10/synthesis' xml:lang='" + name.substring(0, 5) + "'>"
+                + voiceXml(name, rate, pitch, text) + "</speak>";
+        return post(c, sha1(name + "\n" + rate + (pitch.isEmpty() ? "" : "\n" + pitch) + "\n" + text), ssml);
+    }
+
+    /** 一個合成片段：哪個聲音、音高、文字 */
+    static final class Part {
+        final String voice, text; final float pitch;
+        Part(String voice, String text, float pitch) { this.voice = voice; this.text = text; this.pitch = pitch; }
+    }
+
+    /**
+     * 一段話裡的旁白、對白（不同聲音）合成成同一個音檔（1.14）。分開合成的話每換一次聲音就換一個音檔，
+     * 音檔頭尾的靜音加上播放器重新載入，每句對白前都會頓一下
+     */
+    static File synthMulti(Context c, List<Part> parts, String rate) throws IOException {
+        StringBuilder key = new StringBuilder("multi\n").append(rate);
+        StringBuilder ssml = new StringBuilder("<speak version='1.0' xmlns='http://www.w3.org/2001/10/synthesis' xml:lang='zh-TW'>");
+        for (Part p : parts) {
+            String name = p.voice.substring(PREFIX.length()), pitch = pitchAttr(p.pitch);
+            key.append('\n').append(name).append('|').append(pitch).append('|').append(p.text);
+            ssml.append(voiceXml(name, rate, pitch, p.text));
+        }
+        return post(c, sha1(key.toString()), ssml.append("</speak>").toString());
+    }
+
+    /** 送 SSML 合成，存進快取（檔名是 hash）；已經有就直接用 */
+    private static File post(Context c, String hash, String ssml) throws IOException {
         File dir = new File(c.getCacheDir(), "cloudtts");
         if (!dir.isDirectory() && !dir.mkdirs()) throw new CloudError(CloudError.BAD, "快取資料夾建不起來");
-        File f = new File(dir, sha1(name + "\n" + rate + (pitch.isEmpty() ? "" : "\n" + pitch) + "\n" + text) + ".mp3");
+        File f = new File(dir, hash + ".mp3");
         if (f.length() > 0) { f.setLastModified(System.currentTimeMillis()); return f; }
         CloudError held = holdErr;
         if (held != null && System.currentTimeMillis() < holdUntil) throw new CloudError(held.kind, held.getMessage());
 
-        String lang = name.substring(0, 5);
-        // 多語言聲音（雲逸）用台灣國語念：包一層 <lang>，不然它照自己的語系（大陸腔）念
-        String inner = name.contains("Multilingual") ? "<lang xml:lang='zh-TW'>" + esc(text) + "</lang>" : esc(text);
-        byte[] body = ("<speak version='1.0' xmlns='http://www.w3.org/2001/10/synthesis' xml:lang='" + lang + "'><voice name='" + name + "'><prosody rate='" + rate + "'"
-                + (pitch.isEmpty() ? "" : " pitch='" + pitch + "'") + ">" + inner + "</prosody></voice></speak>")
-                .getBytes(StandardCharsets.UTF_8);
+        byte[] body = ssml.getBytes(StandardCharsets.UTF_8);
         String url = base(region(c)) + "/cognitiveservices/v1", key = key(c);
         CloudError last = null;
         for (int attempt = 0; attempt < 3; attempt++) {
@@ -281,6 +316,29 @@ final class CloudTts {
                 if (old != null && old.isDone()) inflight.remove(k, old); // 已經送完的（成功的會在快取裡）
                 it.audio = inflight.computeIfAbsent(k, x -> synthPool.submit(() -> {
                     try { return synth(ctx, it.voice, it.text, rate, p); } finally { inflight.remove(x); }
+                }));
+            }
+            add(it);
+        }
+
+        /** 一段話裡好幾個聲音（旁白＋對白）合成成一個音檔排進佇列（1.14）；只有一個聲音就照舊（快取共用） */
+        void speakMulti(List<Part> parts, float speed, float volume, String id, boolean flush) {
+            if (parts.size() == 1) { Part p = parts.get(0); speak(p.voice, p.text, speed, volume, id, flush, p.pitch); return; }
+            if (flush) stop();
+            Item it = new Item();
+            it.id = id; it.speed = speed; it.volume = volume;
+            StringBuilder all = new StringBuilder();
+            for (Part p : parts) all.append(p.text);
+            it.text = all.toString().trim();
+            if (!it.text.isEmpty()) {
+                String rate = String.format(java.util.Locale.ROOT, "%.2f", baseRate(ctx));
+                StringBuilder k = new StringBuilder("multi\n").append(rate);
+                for (Part p : parts) k.append('\n').append(p.voice).append('|').append(p.pitch).append('|').append(p.text);
+                List<Part> ps = new ArrayList<>(parts);
+                Future<File> old = inflight.get(k.toString());
+                if (old != null && old.isDone()) inflight.remove(k.toString(), old);
+                it.audio = inflight.computeIfAbsent(k.toString(), x -> synthPool.submit(() -> {
+                    try { return synthMulti(ctx, ps, rate); } finally { inflight.remove(x); }
                 }));
             }
             add(it);
