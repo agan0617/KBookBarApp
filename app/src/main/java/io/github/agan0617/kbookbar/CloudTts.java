@@ -59,6 +59,13 @@ final class CloudTts {
             {"zh-CN-YunyiMultilingualNeural", "zh-TW", "雲逸（男，多語言講台灣國語）"},
             {"zh-CN-YunxiNeural", "zh-CN", "雲希（男，大陸腔）"},
             {"zh-CN-YunzeNeural", "zh-CN", "雲澤（男，大陸腔，偏老）"},
+            // 說書用的大陸男聲（1.15，Ken 2026-10-20 要都能選）；「#風格」是 Azure 的說話風格（mstts:express-as）
+            {"zh-CN-YunzeNeural#documentary-narration", "zh-CN", "雲澤（男，大陸腔，紀錄片旁白）"},
+            {"zh-CN-YunxiNeural#narration-relaxed", "zh-CN", "雲希（男，大陸腔，輕鬆旁白）"},
+            {"zh-CN-YunyangNeural#narration-professional", "zh-CN", "雲揚（男，大陸腔，專業旁白）"},
+            {"zh-CN-YunjianNeural", "zh-CN", "雲健（男，大陸腔）"},
+            {"zh-CN-YunyeNeural", "zh-CN", "雲野（男，大陸腔）"},
+            {"zh-CN-YunfengNeural", "zh-CN", "雲楓（男，大陸腔）"},
             // 對白換聲音的女角（1.14，Ken 2026-10-20 選的）：女角曉曉、少女曉伊、老女曉秋
             {"zh-CN-XiaoxiaoNeural", "zh-CN", "曉曉（女，大陸腔）"},
             {"zh-CN-XiaoyiNeural", "zh-CN", "曉伊（女，大陸腔，少女）"},
@@ -155,17 +162,26 @@ final class CloudTts {
         return pct == 0 ? "" : (pct > 0 ? "+" : "") + pct + "%";
     }
 
-    /** 一個聲音的 SSML 片段；多語言聲音（雲逸）用台灣國語念：包一層 <lang>，不然它照自己的語系（大陸腔）念 */
+    // 每份 SSML 的開頭：mstts 命名空間給說話風格用
+    private static final String SPEAK_OPEN = "<speak version='1.0' xmlns='http://www.w3.org/2001/10/synthesis' xmlns:mstts='https://www.w3.org/2001/mstts' xml:lang='";
+
+    /**
+     * 一個聲音的 SSML 片段。name 可以帶「#風格」（zh-CN-YunzeNeural#documentary-narration，1.15），包一層
+     * mstts:express-as；多語言聲音（雲逸）用台灣國語念：包一層 <lang>，不然它照自己的語系（大陸腔）念
+     */
     private static String voiceXml(String name, String rate, String pitch, String text) {
-        String inner = name.contains("Multilingual") ? "<lang xml:lang='zh-TW'>" + esc(text) + "</lang>" : esc(text);
-        return "<voice name='" + name + "'><prosody rate='" + rate + "'" + (pitch.isEmpty() ? "" : " pitch='" + pitch + "'") + ">" + inner + "</prosody></voice>";
+        int hash = name.indexOf('#');
+        String voice = hash < 0 ? name : name.substring(0, hash), style = hash < 0 ? "" : name.substring(hash + 1);
+        String inner = voice.contains("Multilingual") ? "<lang xml:lang='zh-TW'>" + esc(text) + "</lang>" : esc(text);
+        String body = "<prosody rate='" + rate + "'" + (pitch.isEmpty() ? "" : " pitch='" + pitch + "'") + ">" + inner + "</prosody>";
+        if (!style.isEmpty()) body = "<mstts:express-as style='" + style + "'>" + body + "</mstts:express-as>";
+        return "<voice name='" + voice + "'>" + body + "</voice>";
     }
 
     /** 一段文字合成成 mp3（在背景執行緒呼叫）。合成過的直接拿快取；太多請求、網路斷了會稍等再試兩次 */
     static File synth(Context c, String voice, String text, String rate, String pitch) throws IOException {
         String name = voice.substring(PREFIX.length());
-        String ssml = "<speak version='1.0' xmlns='http://www.w3.org/2001/10/synthesis' xml:lang='" + name.substring(0, 5) + "'>"
-                + voiceXml(name, rate, pitch, text) + "</speak>";
+        String ssml = SPEAK_OPEN + name.substring(0, 5) + "'>" + voiceXml(name, rate, pitch, text) + "</speak>";
         return post(c, sha1(name + "\n" + rate + (pitch.isEmpty() ? "" : "\n" + pitch) + "\n" + text), ssml);
     }
 
@@ -181,7 +197,7 @@ final class CloudTts {
      */
     static File synthMulti(Context c, List<Part> parts, String rate) throws IOException {
         StringBuilder key = new StringBuilder("multi\n").append(rate);
-        StringBuilder ssml = new StringBuilder("<speak version='1.0' xmlns='http://www.w3.org/2001/10/synthesis' xml:lang='zh-TW'>");
+        StringBuilder ssml = new StringBuilder(SPEAK_OPEN + "zh-TW'>");
         for (Part p : parts) {
             String name = p.voice.substring(PREFIX.length()), pitch = pitchAttr(p.pitch);
             key.append('\n').append(name).append('|').append(pitch).append('|').append(p.text);
