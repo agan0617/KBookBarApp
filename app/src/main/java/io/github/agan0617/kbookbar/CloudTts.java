@@ -3,6 +3,9 @@ package io.github.agan0617.kbookbar;
 import android.content.Context;
 import android.content.SharedPreferences;
 import android.media.AudioAttributes;
+import android.media.AudioFormat;
+import android.media.AudioManager;
+import android.media.AudioTrack;
 import android.media.MediaPlayer;
 import android.media.PlaybackParams;
 import android.os.Handler;
@@ -311,8 +314,42 @@ final class CloudTts {
         private Item current;
         private MediaPlayer mp;
         private int epoch; // 每次 stop 就 +1，舊的回呼一律忽略
+        // 1.16：所有段落的播放器共用同一個音訊工作階段，念書期間再放一條無聲音軌墊著。不然每段一個新播放器、
+        // 段與段之間又完全不出聲，手機的音效處理、藍牙耳機每段都重新起步，聽起來是每段開頭先變小聲
+        private final int session;
+        private AudioTrack keep;
+        private final Runnable idleOff = () -> keepAlive(false);
 
-        Player(Context ctx, Callback cb) { this.ctx = ctx.getApplicationContext(); this.cb = cb; }
+        Player(Context ctx, Callback cb) {
+            this.ctx = ctx.getApplicationContext(); this.cb = cb;
+            session = ((AudioManager) this.ctx.getSystemService(Context.AUDIO_SERVICE)).generateAudioSessionId();
+        }
+
+        private static AudioAttributes attrs() {
+            return new AudioAttributes.Builder().setUsage(AudioAttributes.USAGE_MEDIA).setContentType(AudioAttributes.CONTENT_TYPE_SPEECH).build();
+        }
+
+        /** 無聲音軌（0.5 秒的全零樣本循環播放），跟播放器同一個工作階段；念書時開著，停了就關 */
+        private void keepAlive(boolean on) {
+            if (on) {
+                main.removeCallbacks(idleOff);
+                if (keep != null) return;
+                try {
+                    int rate = 8000, frames = rate / 2;
+                    AudioTrack t = new AudioTrack(attrs(), new AudioFormat.Builder().setSampleRate(rate)
+                            .setEncoding(AudioFormat.ENCODING_PCM_16BIT).setChannelMask(AudioFormat.CHANNEL_OUT_MONO).build(),
+                            frames * 2, AudioTrack.MODE_STATIC, session);
+                    t.write(new short[frames], 0, frames);
+                    t.setLoopPoints(0, frames, -1);
+                    t.play();
+                    keep = t;
+                } catch (Exception e) { android.util.Log.w("KBookCloud", "keepAlive: " + e); }
+            } else if (keep != null) {
+                AudioTrack t = keep; keep = null;
+                try { t.stop(); } catch (Exception ignored) { }
+                t.release();
+            }
+        }
 
         void speak(String voice, String text, float speed, float volume, String id, boolean flush) {
             speak(voice, text, speed, volume, id, flush, 1f);
@@ -374,15 +411,17 @@ final class CloudTts {
             current = null;
             main.removeCallbacksAndMessages(null);
             releasePlayer();
+            keepAlive(false);
         }
 
         void release() { stop(); synthPool.shutdownNow(); waitPool.shutdownNow(); }
 
-        private void add(Item it) { queue.add(it); if (current == null) next(); }
+        private void add(Item it) { queue.add(it); keepAlive(true); if (current == null) next(); }
 
         private void next() {
             current = queue.poll();
-            if (current == null) return;
+            // 佇列空了（全書念完、或後面的還沒排進來）：5 秒內沒有新的段落就把無聲音軌關掉
+            if (current == null) { main.removeCallbacks(idleOff); main.postDelayed(idleOff, 5000); return; }
             Item it = current; int ep = epoch;
             if (it.silenceMs >= 0) { main.postDelayed(() -> { if (ep == epoch) finish(it); }, it.silenceMs); return; }
             if (it.audio == null) { cb.onStart(it.id); finish(it); return; } // 空白段落
@@ -403,9 +442,8 @@ final class CloudTts {
             MediaPlayer p = new MediaPlayer();
             mp = p;
             try {
-                p.setAudioAttributes(new AudioAttributes.Builder()
-                        .setUsage(AudioAttributes.USAGE_MEDIA)
-                        .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH).build());
+                p.setAudioSessionId(session);
+                p.setAudioAttributes(attrs());
                 p.setDataSource(f.getPath());
                 p.prepare();
                 p.setVolume(it.volume, it.volume);
