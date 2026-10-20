@@ -331,7 +331,12 @@ public class MainActivity extends Activity {
         @JavascriptInterface public void setSleep(String v) { main.post(() -> { TtsService t = TtsService.instance; if (t != null) t.setSleep(v); }); }
 
         /** 試聽一小段（修正讀音時用）：用列語音清單的那個引擎念，不動朗讀服務 */
-        @JavascriptInterface public void preview(String text, String voice, float rate, float volume) {
+        @JavascriptInterface public void preview(String text, String voice, float rate, float volume) { previewImpl(text, voice, rate, volume, 1f); }
+
+        /** 試聽加上音高（對白換聲音的聲音配置，1.13） */
+        @JavascriptInterface public void previewPitch(String text, String voice, float rate, float volume, float pitch) { previewImpl(text, voice, rate, volume, pitch); }
+
+        private void previewImpl(String text, String voice, float rate, float volume, float pitch) {
             main.post(() -> {
                 if (text == null || text.isEmpty()) return;
                 if (CloudTts.isCloud(voice) && CloudTts.configured(MainActivity.this)) {
@@ -341,13 +346,14 @@ public class MainActivity extends Activity {
                         @Override public void onDone(String id) { }
                         @Override public void onError(String id, CloudTts.CloudError e) { toast("雲端語音試聽失敗：" + e.getMessage()); }
                     });
-                    previewCloud.speak(voice, text, rate, volume, "preview", true);
+                    previewCloud.speak(voice, text, rate, volume, "preview", true, pitch);
                     return;
                 }
                 if (!voicesReady || voiceProbe == null) return;
                 if (previewCloud != null) previewCloud.stop();
                 TtsService.applyVoice(voiceProbe, CloudTts.isCloud(voice) ? "" : voice);
                 voiceProbe.setSpeechRate(rate);
+                voiceProbe.setPitch(pitch);
                 Bundle p = new Bundle();
                 p.putFloat(TextToSpeech.Engine.KEY_PARAM_VOLUME, volume);
                 voiceProbe.speak(text, TextToSpeech.QUEUE_FLUSH, p, "preview");

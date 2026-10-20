@@ -10,8 +10,8 @@ android {
         applicationId 'io.github.agan0617.kbookbar'
         minSdk 29
         targetSdk 34
-        versionCode 13
-        versionName '1.12'
+        versionCode 14
+        versionName '1.13'
     }
 
     buildTypes {

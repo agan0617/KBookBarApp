@@ -52,6 +52,11 @@ final class CloudTts {
             {"zh-TW-HsiaoChenNeural", "zh-TW", "曉臻（女）"},
             {"zh-TW-HsiaoYuNeural", "zh-TW", "曉雨（女）"},
             {"zh-TW-YunJheNeural", "zh-TW", "雲哲（男）"},
+            // 台灣國語只有雲哲一個男聲，對白換聲音（1.13）的男角要另一個男聲：多語言的雲逸講台灣國語
+            // （語系寫 zh-TW，合成時包 <lang xml:lang='zh-TW'>），或大陸腔的雲希、雲澤
+            {"zh-CN-YunyiMultilingualNeural", "zh-TW", "雲逸（男，多語言講台灣國語）"},
+            {"zh-CN-YunxiNeural", "zh-CN", "雲希（男，大陸腔）"},
+            {"zh-CN-YunzeNeural", "zh-CN", "雲澤（男，大陸腔，偏老）"},
             {"ja-JP-NanamiNeural", "ja-JP", "七海（女）"},
             {"ja-JP-KeitaNeural", "ja-JP", "圭太（男）"},
     };
@@ -138,18 +143,27 @@ final class CloudTts {
         return s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace("\"", "&quot;").replace("'", "&apos;");
     }
 
+    /** 音高倍率（對白換聲音用，1.13）換成 SSML 的相對音高；1 倍回傳空字串（不加 pitch，快取鍵也跟舊版一樣） */
+    static String pitchAttr(float pitch) {
+        int pct = Math.round((pitch - 1f) * 100f);
+        return pct == 0 ? "" : (pct > 0 ? "+" : "") + pct + "%";
+    }
+
     /** 一段文字合成成 mp3（在背景執行緒呼叫）。合成過的直接拿快取；太多請求、網路斷了會稍等再試兩次 */
-    static File synth(Context c, String voice, String text, String rate) throws IOException {
+    static File synth(Context c, String voice, String text, String rate, String pitch) throws IOException {
         String name = voice.substring(PREFIX.length());
         File dir = new File(c.getCacheDir(), "cloudtts");
         if (!dir.isDirectory() && !dir.mkdirs()) throw new CloudError(CloudError.BAD, "快取資料夾建不起來");
-        File f = new File(dir, sha1(name + "\n" + rate + "\n" + text) + ".mp3");
+        File f = new File(dir, sha1(name + "\n" + rate + (pitch.isEmpty() ? "" : "\n" + pitch) + "\n" + text) + ".mp3");
         if (f.length() > 0) { f.setLastModified(System.currentTimeMillis()); return f; }
         CloudError held = holdErr;
         if (held != null && System.currentTimeMillis() < holdUntil) throw new CloudError(held.kind, held.getMessage());
 
         String lang = name.substring(0, 5);
-        byte[] body = ("<speak version='1.0' xml:lang='" + lang + "'><voice name='" + name + "'><prosody rate='" + rate + "'>" + esc(text) + "</prosody></voice></speak>")
+        // 多語言聲音（雲逸）用台灣國語念：包一層 <lang>，不然它照自己的語系（大陸腔）念
+        String inner = name.contains("Multilingual") ? "<lang xml:lang='zh-TW'>" + esc(text) + "</lang>" : esc(text);
+        byte[] body = ("<speak version='1.0' xmlns='http://www.w3.org/2001/10/synthesis' xml:lang='" + lang + "'><voice name='" + name + "'><prosody rate='" + rate + "'"
+                + (pitch.isEmpty() ? "" : " pitch='" + pitch + "'") + ">" + inner + "</prosody></voice></speak>")
                 .getBytes(StandardCharsets.UTF_8);
         String url = base(region(c)) + "/cognitiveservices/v1", key = key(c);
         CloudError last = null;
@@ -250,17 +264,23 @@ final class CloudTts {
         Player(Context ctx, Callback cb) { this.ctx = ctx.getApplicationContext(); this.cb = cb; }
 
         void speak(String voice, String text, float speed, float volume, String id, boolean flush) {
+            speak(voice, text, speed, volume, id, flush, 1f);
+        }
+
+        /** pitch：音高倍率（對白換聲音的男女老少，1.13），1 倍就是原本的聲音 */
+        void speak(String voice, String text, float speed, float volume, String id, boolean flush, float pitch) {
             if (flush) stop();
             Item it = new Item();
             it.id = id; it.voice = voice; it.text = text == null ? "" : text.trim();
             it.speed = speed; it.volume = volume;
             if (!it.text.isEmpty()) {
                 String rate = String.format(java.util.Locale.ROOT, "%.2f", baseRate(ctx));
-                String k = it.voice + "\n" + rate + "\n" + it.text;
+                String p = pitchAttr(pitch);
+                String k = it.voice + "\n" + rate + "\n" + p + "\n" + it.text;
                 Future<File> old = inflight.get(k);
                 if (old != null && old.isDone()) inflight.remove(k, old); // 已經送完的（成功的會在快取裡）
                 it.audio = inflight.computeIfAbsent(k, x -> synthPool.submit(() -> {
-                    try { return synth(ctx, it.voice, it.text, rate); } finally { inflight.remove(x); }
+                    try { return synth(ctx, it.voice, it.text, rate, p); } finally { inflight.remove(x); }
                 }));
             }
             add(it);

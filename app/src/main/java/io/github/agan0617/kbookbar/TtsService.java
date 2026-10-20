@@ -75,6 +75,9 @@ public class TtsService extends Service implements TextToSpeech.OnInitListener {
         List<String> blocks = new ArrayList<>();
         java.util.Set<Integer> heads = new java.util.HashSet<>();
         int[] pre; // 每段開始前停幾毫秒（1× 語速的基準，網頁算好送來）；舊網頁沒送就是 null
+        // 對白換聲音（1.13）：每段切成旁白／對白的角色與字數（網頁照角色表算好送來）；沒有對白的段落是 null
+        String[][] segRole;
+        int[][] segLen;
     }
 
     private final Handler main = new Handler(Looper.getMainLooper());
@@ -96,6 +99,9 @@ public class TtsService extends Service implements TextToSpeech.OnInitListener {
     private int gen;             // 每次清空佇列就 +1，舊的回呼一律忽略
     private float rate = 1f, volume = 1f;
     private String voiceName = "";
+    // 對白換聲音的聲音配置：角色 → {v: 聲音名稱（空字串＝跟旁白一樣）, p: 音高倍率}；雲端語音、手機語音各一份，沒開就是 null
+    private JSONObject castCloud, castDevice;
+    private final java.util.Map<String, Voice> voiceCache = new java.util.HashMap<>();
     private boolean stopAtChEnd;
     private int sleepCh = -1;
     private long sleepAt;
@@ -174,8 +180,13 @@ public class TtsService extends Service implements TextToSpeech.OnInitListener {
 
     // ─────────────────────────────── 對外操作 ───────────────────────────────
 
-    /** start 的 JSON：{bookId, bookTitle, chapters:[{title, blocks:[...], heads:[標題段的編號], pre:[每段前停幾毫秒]}], ch, b, rate, volume, voice, sleep} */
+    /**
+     * start 的 JSON：{bookId, bookTitle, chapters:[{title, blocks:[...], heads:[標題段的編號], pre:[每段前停幾毫秒],
+     * segs:[每段 [[角色, 字數], …] 或 null]}], ch, b, rate, volume, voice, sleep,
+     * cast:{cloud:{角色:{v, p}}, device:{…}}}。segs、cast 是對白換聲音（1.13），沒開就不帶
+     */
     private void load(String json) {
+        voiceCache.clear(); // 中間可能剛下載了新聲音
         try {
             JSONObject o = new JSONObject(json);
             bookId = o.optString("bookId");
@@ -192,8 +203,27 @@ public class TtsService extends Service implements TextToSpeech.OnInitListener {
                 if (hd != null) for (int k = 0; k < hd.length(); k++) chap.heads.add(hd.optInt(k, -1));
                 JSONArray pr = c.optJSONArray("pre");
                 if (pr != null) { chap.pre = new int[pr.length()]; for (int k = 0; k < pr.length(); k++) chap.pre[k] = Math.max(0, pr.optInt(k, 0)); }
+                JSONArray sg = c.optJSONArray("segs"); // 對白換聲音（1.13）：[[角色, 字數], …] 或 null
+                if (sg != null) {
+                    int n = chap.blocks.size();
+                    chap.segRole = new String[n][]; chap.segLen = new int[n][];
+                    for (int k = 0; k < sg.length() && k < n; k++) {
+                        JSONArray one = sg.optJSONArray(k);
+                        if (one == null) continue;
+                        String[] r = new String[one.length()]; int[] len = new int[one.length()];
+                        for (int j = 0; j < one.length(); j++) {
+                            JSONArray x = one.optJSONArray(j);
+                            r[j] = x == null ? "n" : x.optString(0, "n");
+                            len[j] = x == null ? 0 : Math.max(0, x.optInt(1, 0));
+                        }
+                        chap.segRole[k] = r; chap.segLen[k] = len;
+                    }
+                }
                 chapters.add(chap);
             }
+            JSONObject cast = o.optJSONObject("cast");
+            castCloud = cast == null ? null : cast.optJSONObject("cloud");
+            castDevice = cast == null ? null : cast.optJSONObject("device");
             ch = clamp(o.optInt("ch"), 0, chapters.size() - 1);
             b = Math.max(0, o.optInt("b"));
             rate = (float) o.optDouble("rate", 1);
@@ -302,9 +332,13 @@ public class TtsService extends Service implements TextToSpeech.OnInitListener {
         while (qCh < chapters.size() && qB >= chapters.get(qCh).blocks.size()) { qCh++; qB = 0; }
         if (qCh >= chapters.size()) return false;
         boolean cl = useCloud();
-        List<String> chunks = split(chapters.get(qCh).blocks.get(qB), cl ? CLOUD_CHUNK : MAX_CHUNK);
+        // 段落先切成旁白／對白（沒有角色表就整段旁白），每一片再照長度切；roles 跟 chunks 一對一
+        List<String> chunks = new ArrayList<>(), roles = new ArrayList<>();
+        for (String[] pc : pieces(chapters.get(qCh), qB, cl ? castCloud : castDevice)) {
+            for (String t : split(pc[1], cl ? CLOUD_CHUNK : MAX_CHUNK)) { chunks.add(t); roles.add(pc[0]); }
+        }
         boolean head = !chunks.isEmpty() && chapters.get(qCh).heads.contains(qB);
-        if (chunks.isEmpty()) chunks.add("　");
+        if (chunks.isEmpty()) { chunks.add("　"); roles.add("n"); }
         Bundle params = new Bundle();
         params.putFloat(TextToSpeech.Engine.KEY_PARAM_VOLUME, volume);
         Chapter chap = chapters.get(qCh);
@@ -322,21 +356,78 @@ public class TtsService extends Service implements TextToSpeech.OnInitListener {
         if (cl) {
             for (int s = 0; s < chunks.size(); s++) {
                 String id = gen + "|" + qCh + "|" + qB + "|" + s + "|" + (s == chunks.size() - 1 ? 1 : 0);
-                cloud.speak(voiceName, chunks.get(s), head ? rate * HEAD_RATE : rate, volume, id, flush && s == 0);
+                // 對白：照雲端那份配置換聲音、音高；指定的不是雲端語音就用旁白的聲音
+                JSONObject e = roleCfg(castCloud, roles.get(s));
+                String v = voiceName; float pitch = 1f;
+                if (e != null) {
+                    pitch = (float) e.optDouble("p", 1);
+                    String rv = e.optString("v", "");
+                    if (CloudTts.isCloud(rv)) v = rv;
+                }
+                cloud.speak(v, chunks.get(s), head ? rate * HEAD_RATE : rate, volume, id, flush && s == 0, pitch);
             }
             qB++;
             return true;
         }
-        // 語速在 speak 當下就跟著這一句排進佇列，所以改完馬上改回來不影響前後句
+        // 語速、聲音、音高在 speak 當下就跟著這一句排進佇列，所以改完馬上改回來不影響前後句
         if (head) tts.setSpeechRate(rate * HEAD_RATE);
+        String cur = ""; // 現在設的是哪個角色聲音（空字串＝旁白）
         for (int s = 0; s < chunks.size(); s++) {
             String id = gen + "|" + qCh + "|" + qB + "|" + s + "|" + (s == chunks.size() - 1 ? 1 : 0);
+            // 對白：照手機語音那份配置換聲音、音高；指定的聲音沒下載就用旁白的
+            JSONObject e = roleCfg(castDevice, roles.get(s));
+            String rv = e == null ? "" : e.optString("v", "");
+            Voice target = rv.isEmpty() || CloudTts.isCloud(rv) ? null : installedVoice(rv);
+            String want = target == null ? "" : target.getName();
+            if (!want.equals(cur)) {
+                if (target == null) narratorVoice(); else tts.setVoice(target);
+                cur = want;
+            }
+            tts.setPitch(e == null ? 1f : (float) e.optDouble("p", 1));
             tts.speak(chunks.get(s), flush && s == 0 ? TextToSpeech.QUEUE_FLUSH : TextToSpeech.QUEUE_ADD, params, id);
         }
+        if (!cur.isEmpty()) narratorVoice();
+        tts.setPitch(1f);
         if (head) tts.setSpeechRate(rate);
         qB++;
         return true;
     }
+
+    /** 一段的旁白／對白片段 {角色, 文字}：有角色表的切法、而且這個引擎有聲音配置才切，不然整段旁白 */
+    private static List<String[]> pieces(Chapter chap, int blk, JSONObject cfg) {
+        List<String[]> out = new ArrayList<>();
+        String text = chap.blocks.get(blk);
+        if (text == null) return out;
+        if (cfg != null && chap.segRole != null && blk < chap.segRole.length && chap.segRole[blk] != null) {
+            int at = 0;
+            for (int j = 0; j < chap.segRole[blk].length; j++) {
+                int end = Math.min(text.length(), at + chap.segLen[blk][j]);
+                if (end > at) out.add(new String[]{chap.segRole[blk][j], text.substring(at, end)});
+                at = end;
+            }
+            if (at < text.length()) out.add(new String[]{"n", text.substring(at)});
+            return out;
+        }
+        out.add(new String[]{"n", text});
+        return out;
+    }
+
+    /** 角色的聲音配置；旁白（n）或沒開對白換聲音回傳 null */
+    private static JSONObject roleCfg(JSONObject cfg, String role) {
+        return cfg == null || role == null || "n".equals(role) ? null : cfg.optJSONObject(role);
+    }
+
+    /** 手機語音引擎裡叫這個名字、而且已經下載好的聲音 */
+    private Voice installedVoice(String name) {
+        if (voiceCache.isEmpty()) {
+            try { for (Voice v : tts.getVoices()) voiceCache.put(v.getName(), v); } catch (Exception ignored) { }
+        }
+        Voice v = voiceCache.get(name);
+        return v == null || notInstalled(v) ? null : v;
+    }
+
+    /** 換回旁白的聲音（旁白是雲端語音時，手機語音接手用台灣國語預設）；不跳「沒下載」的提示，那在選語音時就提示過了 */
+    private void narratorVoice() { applyVoice(tts, CloudTts.isCloud(voiceName) ? "" : voiceName); }
 
     private int errs; // 連續出錯次數：語音沒下載、沒網路時每句都會錯，不擋的話會一路「跳」完整本書
 
