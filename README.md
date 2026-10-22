@@ -58,3 +58,12 @@ gradlew assembleRelease
 ## 小米（HyperOS）
 
 第一次打開會請你允許「不限制電池用量」。如果關螢幕久了還是被停，到「設定 → 應用程式 → K書吧 → 省電策略」選「無限制」，並在最近使用的 App 裡把 K書吧 鎖住（下拉卡片上的鎖頭）。
+
+## 版權
+
+Copyright © 2026 agan0617. All rights reserved. 保留所有權利，詳見 [LICENSE](LICENSE)。
+
+使用的第三方素材（依各自授權）：
+
+- **Microsoft Azure 語音服務（神經語音 REST API）**：雲端語音朗讀（曉臻、曉雨、雲哲、七海、圭太等）；金鑰由使用者自己申請貼入，Microsoft Azure 服務條款（https://azure.microsoft.com/products/ai-services/text-to-speech）
+- **Gradle Wrapper**：建置腳本，Apache-2.0（https://gradle.org/）
