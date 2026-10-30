@@ -60,19 +60,26 @@ final class CloudTts {
             // 台灣國語只有雲哲一個男聲，對白換聲音（1.13）的男角要另一個男聲：多語言的雲逸講台灣國語
             // （語系寫 zh-TW，合成時包 <lang xml:lang='zh-TW'>），或大陸腔的雲希、雲澤
             {"zh-CN-YunyiMultilingualNeural", "zh-TW", "雲逸（男，多語言講台灣國語）"},
-            {"zh-CN-YunxiNeural", "zh-CN", "雲希（男，大陸腔）"},
-            {"zh-CN-YunzeNeural", "zh-CN", "雲澤（男，大陸腔，偏老）"},
+            {"zh-CN-YunxiNeural", "zh-CN", "雲希（男，大陸腔，青年）"},
+            {"zh-CN-YunzeNeural", "zh-CN", "雲澤（男，大陸腔，老年）"},
             // 說書用的大陸男聲（1.15，Ken 2026-10-20 要都能選）；「#風格」是 Azure 的說話風格（mstts:express-as）
             {"zh-CN-YunzeNeural#documentary-narration", "zh-CN", "雲澤（男，大陸腔，紀錄片旁白）"},
+            {"zh-CN-YunjianNeural#documentary-narration", "zh-CN", "雲健（男，大陸腔，紀錄片旁白）"},
             {"zh-CN-YunxiNeural#narration-relaxed", "zh-CN", "雲希（男，大陸腔，輕鬆旁白）"},
             {"zh-CN-YunyangNeural#narration-professional", "zh-CN", "雲揚（男，大陸腔，專業旁白）"},
-            {"zh-CN-YunjianNeural", "zh-CN", "雲健（男，大陸腔）"},
-            {"zh-CN-YunyeNeural", "zh-CN", "雲野（男，大陸腔）"},
-            {"zh-CN-YunfengNeural", "zh-CN", "雲楓（男，大陸腔）"},
-            // 對白換聲音的女角（1.14，Ken 2026-10-20 選的）：女角曉曉、少女曉伊、老女曉秋
+            {"zh-CN-YunjianNeural", "zh-CN", "雲健（男，大陸腔，低沉）"},
+            {"zh-CN-YunyeNeural", "zh-CN", "雲野（男，大陸腔，沉穩）"},
+            {"zh-CN-YunfengNeural", "zh-CN", "雲楓（男，大陸腔，壯年）"},
+            {"zh-CN-YunxiaNeural", "zh-CN", "雲夏（男，大陸腔，童聲）"},
+            // 對白換聲音的女角（1.14 起；1.17 起男女老少各用一個聲音，Ken 2026-10-30 選的）：女角曉涵、老女曉睿、少女曉伊
+            {"zh-CN-XiaohanNeural", "zh-CN", "曉涵（女，大陸腔，成年）"},
+            {"zh-CN-XiaozhenNeural", "zh-CN", "曉甄（女，大陸腔，冷靜）"},
+            {"zh-CN-XiaoruiNeural", "zh-CN", "曉睿（女，大陸腔，老年）"},
+            {"zh-CN-XiaoqiuNeural", "zh-CN", "曉秋（女，大陸腔，中年）"},
             {"zh-CN-XiaoxiaoNeural", "zh-CN", "曉曉（女，大陸腔）"},
             {"zh-CN-XiaoyiNeural", "zh-CN", "曉伊（女，大陸腔，少女）"},
-            {"zh-CN-XiaoqiuNeural", "zh-CN", "曉秋（女，大陸腔，偏年長）"},
+            {"zh-CN-XiaoshuangNeural", "zh-CN", "曉雙（女，大陸腔，童聲）"},
+            {"zh-CN-XiaoyouNeural", "zh-CN", "曉悠（女，大陸腔，童聲）"},
             {"ja-JP-NanamiNeural", "ja-JP", "七海（女）"},
             {"ja-JP-KeitaNeural", "ja-JP", "圭太（男）"},
     };
