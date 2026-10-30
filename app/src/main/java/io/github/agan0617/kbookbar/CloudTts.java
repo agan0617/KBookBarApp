@@ -71,7 +71,8 @@ final class CloudTts {
             {"zh-CN-YunyeNeural", "zh-CN", "雲野（男，大陸腔，沉穩）"},
             {"zh-CN-YunfengNeural", "zh-CN", "雲楓（男，大陸腔，壯年）"},
             {"zh-CN-YunxiaNeural", "zh-CN", "雲夏（男，大陸腔，童聲）"},
-            // 對白換聲音的女角（1.14 起；1.17 起男女老少各用一個聲音，Ken 2026-10-30 選的）：女角曉涵、老女曉睿、少女曉伊
+            // 對白換聲音的女角（1.14 起；1.17 起男女老少各用一個聲音，Ken 2026-10-30 選的）：女角曉墨（曉涵太正經，同日 Ken 換）、老女曉睿、少女曉伊
+            {"zh-CN-XiaomoNeural", "zh-CN", "曉墨（女，大陸腔，柔和）"},
             {"zh-CN-XiaohanNeural", "zh-CN", "曉涵（女，大陸腔，成年）"},
             {"zh-CN-XiaozhenNeural", "zh-CN", "曉甄（女，大陸腔，冷靜）"},
             {"zh-CN-XiaoruiNeural", "zh-CN", "曉睿（女，大陸腔，老年）"},
